@@ -244,6 +244,12 @@ class TickMessage(BaseModel):
     cooldown: bool
     ob_freeze: bool
     event_state: str
+    # In-play strength update (populated after each goal)
+    last_goal_type: str = "NEUTRAL"  # "SURPRISE" | "EXPECTED" | "NEUTRAL"
+                                     # SURPRISE: scoring team pre-match prob < 0.35
+                                     # EXPECTED: scoring team pre-match prob > 0.60
+    a_H_current: float = 0.0        # Bayesian-updated home intensity
+    a_A_current: float = 0.0        # Bayesian-updated away intensity
     mu_H: float
     mu_A: float
     score: tuple[int, int]
@@ -342,11 +348,12 @@ TIER 1 — ODDS CONSENSUS (primary, <2s latency)
   → If 2+ bookmakers move >3% same direction within 5s → HIGH confidence
   → Also serves as event detection (faster than Goalserve)
 
-TIER 2 — MMPP MODEL (fallback, 3-5s latency)
-  Goalserve poll → model state update → MC pricing → P_model
+TIER 2 — MMPP MODEL + IN-PLAY STRENGTH UPDATER (fallback, 3-5s latency)
+  Goalserve poll → event detected → InPlayStrengthUpdater.update_on_goal()
+                → updated a_H/a_A → MC pricing → P_model
   → Used when odds consensus is NONE (all sources stale)
   → Used as sanity check against consensus
-  → Used for markets where bookmakers don't provide odds
+  → PRIMARY edge source when last_goal_type == SURPRISE or RED_CARD detected
 
 TIER 3 — GOALSERVE CONTEXT (supplementary, 3s latency)
   → What happened: goal, red card, period change, VAR
@@ -354,8 +361,33 @@ TIER 3 — GOALSERVE CONTEXT (supplementary, 3s latency)
   → Dashboard logging and post-match analysis
 ```
 
-**Why Betfair Exchange is the primary reference (academic basis):**
-Croxson & Reade (2014) found Betfair EPL in-play markets to be semi-strong efficient — prices update swiftly and fully after goals. Angelini, De Angelis & Singleton (2021) confirmed this on 1,004 EPL matches but found systematic mispricing for 5+ minutes after surprise goals (favourite bias). Kalshi, as a newer prediction market with lower volume (~$500K vs Betfair's millions per match), is expected to be less efficient. The edge is the gap between these two markets.
+**Revised trading thesis (v4 — post Sprint 7 validation):**
+
+Original hypothesis: Betfair/bookmakers react faster than Kalshi → cross-market lag edge.
+Empirical finding: Kalshi reacts within seconds; bookmakers suspend markets 1-2min on goals;
+Goalserve has ~30s delay. Cross-market lag is not exploitable with current data sources.
+
+**Revised primary edge: MMPP model accuracy vs Kalshi participant behavioral bias.**
+
+Kalshi participants (US retail) exhibit biases documented in academic literature:
+- Surprise Goal overreaction: underdog scores → Kalshi overshoots vs MMPP λ-based calc
+  (Choi & Hui 2014: bias persists ~5min, decays ~40%/min)
+- Red card overreaction: market overshoots vs MMPP empirical κ=0.67/1.25
+  (Vecer et al. 2009)
+- Stoppage time anchoring: participants anchor to 90min; MMPP b[bin=7/8] captures
+  elevated late-match scoring rates (Dixon & Robinson 1998)
+
+**InPlayStrengthUpdater** (src/engine/strength_updater.py) improves MMPP accuracy by
+Bayesian-updating a_H/a_A on each goal event:
+
+  shrink(t) = μ_elapsed / (μ_elapsed + σ_a²)
+  a_new     = a_prior + shrink(t) · log((n_actual + 0.5) / (μ_elapsed + 0.5))
+
+σ_a reused from production_params. No additional training required.
+Method: empirical Bayes shrinkage for Poisson rates (normal-normal approximation).
+Inspired by state-space filtering concepts. Koopman & Lit (2015) motivates the
+need for dynamic team strengths but uses a different estimation method (SPDK,
+week-to-week). Our formula is a real-time closed-form approximation.
 
 **Coroutine structure:**
 ```python
@@ -434,6 +466,14 @@ else:  # NONE
 7. **order_allowed conditions:**
    `not model.cooldown AND not model.ob_freeze AND model.event_state == IDLE`
    Phase 3 decides "can trade?", Phase 4 decides "should trade?".
+
+8. **InPlayStrengthUpdater — goal-triggered a_H/a_A update:**
+   On every goal: updater.update_on_goal(team, mu_H_elapsed, mu_A_elapsed) → new a_H, a_A.
+   mu_H_elapsed = max(0, mu_H_at_kickoff - mu_H_current).
+   sigma_a reused from production_params — no new training needed.
+   classify_goal() sets model.last_goal_type → TickPayload → Phase 4 Kelly multiplier.
+   a_H_init / a_A_init preserved for dashboard delta display.
+   DO NOT modify mc_core.py — updater outputs plain floats, MC signature unchanged.
 
 ### 3.4 Phase 4: Execution Engine
 
@@ -617,20 +657,20 @@ Sprint -1 will measure liquidity and price impact at scale. The precise lag ques
 
 **Edge sources (ranked by conviction):**
 
-**Primary — Cross-market lag (high conviction hypothesis):**
-Betfair + bookmakers react to events within 1-3s. Kalshi, with fewer automated participants and no market suspension mechanism (unlike Betfair which suspends on goals), may have stale orders for 5-30s after events. The odds consensus from 5 bookmakers gives us a reliable reference price within 2s.
+**Primary — Model-based mispricing on Kalshi (high conviction):**
+MMPP with InPlayStrengthUpdater vs Kalshi participant behavioral bias.
+Active in three specific windows:
+  SURPRISE goal (underdog scores): BUY NO on underdog WIN. Window: ~5min post-goal.
+  Red card: BUY YES on penalized team if Kalshi overreacts. Window: ~3min post-card.
+  Minute >88: BUY against DRAW if MMPP detects elevated scoring rate.
+Signal fires when: last_goal_type == SURPRISE AND |P_model - P_kalshi| > 0.08.
 
-**Secondary — Model-based mispricing (medium conviction):**
-Even Betfair shows systematic mispricing in specific conditions (Angelini et al. 2021):
-- Favourite bias: expected winners underpriced on exchanges (reverse favourite-longshot bias)
-- Surprise goals: longshot team scoring late → market underestimates their chances for 5+ minutes
-- Red card overreaction: markets overadjust — MMPP's Markov state captures the true impact
-- Stoppage time uncertainty: participants anchor to "90 minutes"
+**Secondary — Cross-market lag (unconfirmed, monitor):**
+Original hypothesis not validated. Odds consensus infrastructure kept active.
+Used only for P_reference sanity check until lag is empirically confirmed.
 
-In these cases, MMPP can outperform even Betfair. The model is the edge source when consensus and model diverge AND the model has structural reasons to be right.
-
-**Tertiary — Automation + discipline (low edge but consistent):**
-Every second, across 8 leagues, all markets evaluated. No emotion, no fatigue, no missed opportunities.
+**Tertiary — Automation + discipline (consistent):**
+Every second, across 8 leagues, all markets evaluated. No emotion, no fatigue.
 
 #### 3.7.2 Entry Conditions (When to Buy)
 
@@ -657,9 +697,11 @@ ALL of the following must be true:
    Kelly fraction = (P_reference * payout - 1) / (payout - 1)
    
    Confidence-adjusted multiplier:
-   - consensus HIGH: Kelly * 0.25 (quarter Kelly)
-   - consensus LOW: Kelly * 0.10 (tenth Kelly)
-   - model-only: Kelly * 0.10 (tenth Kelly)
+   - consensus HIGH + NEUTRAL goal:        Kelly * 0.25
+   - consensus HIGH + SURPRISE or RED_CARD: Kelly * 0.35
+   - consensus LOW:                         Kelly * 0.10
+   - model-only + SURPRISE or RED_CARD:    Kelly * 0.15
+   - model-only + NEUTRAL:                 Kelly * 0.10
    
    Dollar amount = adjusted_kelly * bankroll
    Contracts = floor(dollar_amount / P_kalshi)
