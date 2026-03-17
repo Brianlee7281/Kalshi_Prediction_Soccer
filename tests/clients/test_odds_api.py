@@ -27,7 +27,7 @@ def test_league_slugs_has_8_leagues():
 
 def test_fixture_events_structure():
     """Verify saved events fixture has expected fields."""
-    with open(FIXTURE_DIR / "odds_api_events.json") as f:
+    with open(FIXTURE_DIR / "odds_api_events.json", encoding="utf-8") as f:
         events = json.load(f)
     assert isinstance(events, list)
     assert len(events) > 0
@@ -41,7 +41,7 @@ def test_fixture_events_structure():
 
 def test_fixture_odds_structure():
     """Verify saved odds fixture has bookmakers data."""
-    with open(FIXTURE_DIR / "odds_api_odds.json") as f:
+    with open(FIXTURE_DIR / "odds_api_odds.json", encoding="utf-8") as f:
         odds = json.load(f)
     assert isinstance(odds, dict)
     assert "bookmakers" in odds

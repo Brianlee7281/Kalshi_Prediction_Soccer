@@ -58,10 +58,16 @@ CRON: release stale RESERVED entries >60s old, every 5min.
 
 ```python
 kelly_multiplier = {
-    "consensus_HIGH": 0.25,    # quarter Kelly
-    "consensus_LOW":  0.10,    # tenth Kelly
-    "model_only":     0.10,    # tenth Kelly, higher EV threshold (3¢ vs 2¢)
+    "consensus_HIGH_neutral":   0.25,
+    "consensus_HIGH_surprise":  0.35,   # SURPRISE or RED_CARD event
+    "consensus_LOW":            0.10,
+    "model_only_surprise":      0.15,   # SURPRISE or RED_CARD, model-only
+    "model_only_neutral":       0.10,
 }
+# last_goal_type from TickPayload determines which key to use.
+# SURPRISE: scoring team pre-match prob < 0.35
+# EXPECTED: scoring team pre-match prob > 0.60
+# NEUTRAL: otherwise
 ```
 
 ## Pattern 6: Parameter Version Pinning

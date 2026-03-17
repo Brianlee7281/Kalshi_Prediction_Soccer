@@ -58,6 +58,14 @@ def handle_goal(
         delta_S=model.delta_S,
     )
 
+    if model.strength_updater is not None:
+        new_a_H, new_a_A = model.strength_updater.update_on_goal(
+            team, model.mu_H_elapsed, model.mu_A_elapsed
+        )
+        model.a_H = new_a_H
+        model.a_A = new_a_A
+        model.last_goal_type = model.strength_updater.classify_goal(team).label
+
 
 def handle_red_card(
     model: LiveMatchModel,

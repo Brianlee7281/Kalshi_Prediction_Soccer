@@ -15,6 +15,7 @@ from scipy.linalg import expm
 
 from src.common.logging import get_logger
 from src.common.types import OddsConsensusResult, Phase2Result
+from src.engine.strength_updater import InPlayStrengthUpdater
 
 logger = get_logger("engine.model")
 
@@ -104,6 +105,16 @@ class LiveMatchModel:
     P_grid: dict[int, np.ndarray] = field(default_factory=dict)
     P_fine_grid: dict[int, np.ndarray] = field(default_factory=dict)
 
+    # In-play strength updater state
+    sigma_a: float = 0.5
+    pre_match_home_prob: float = 0.5
+    mu_H_at_kickoff: float = 0.0
+    mu_A_at_kickoff: float = 0.0
+    mu_H_elapsed: float = 0.0
+    mu_A_elapsed: float = 0.0
+    last_goal_type: str = "NEUTRAL"
+    strength_updater: InPlayStrengthUpdater | None = None
+
     @classmethod
     def from_phase2_result(
         cls, result: Phase2Result, params: dict
@@ -135,6 +146,18 @@ class LiveMatchModel:
 
         P_grid, P_fine_grid = _precompute_grids(Q)
 
+        sigma_a = params.get("sigma_a", 0.5)
+        pre_match_home_prob = 0.5
+        if result.market_implied is not None:
+            pre_match_home_prob = result.market_implied.home_win
+
+        updater = InPlayStrengthUpdater(
+            a_H_init=result.a_H,
+            a_A_init=result.a_A,
+            sigma_a_sq=sigma_a ** 2,
+            pre_match_home_prob=pre_match_home_prob,
+        )
+
         model = cls(
             match_id=result.match_id,
             league_id=result.league_id,
@@ -154,6 +177,11 @@ class LiveMatchModel:
             T_exp=T_exp,
             P_grid=P_grid,
             P_fine_grid=P_fine_grid,
+            sigma_a=sigma_a,
+            pre_match_home_prob=pre_match_home_prob,
+            mu_H_at_kickoff=result.mu_H,
+            mu_A_at_kickoff=result.mu_A,
+            strength_updater=updater,
         )
 
         logger.info(

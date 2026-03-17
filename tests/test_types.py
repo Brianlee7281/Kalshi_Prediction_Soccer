@@ -18,6 +18,7 @@ def test_tick_payload_reference_source():
         P_reference=MarketProbs(home_win=0.5, draw=0.3, away_win=0.2),
         reference_source="model",
         score=(0, 0), X=0, delta_S=0, mu_H=1.2, mu_A=0.9,
+        a_H_current=0.3, a_A_current=0.1,
         order_allowed=True, cooldown=False, ob_freeze=False, event_state="IDLE",
     )
     assert tp.reference_source in ("consensus", "model")

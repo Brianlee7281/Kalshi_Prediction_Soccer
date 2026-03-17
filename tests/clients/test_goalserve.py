@@ -12,7 +12,7 @@ FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "goalserve_live.json"
 
 @pytest.fixture
 def live_data() -> dict:
-    with open(FIXTURE_PATH) as f:
+    with open(FIXTURE_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 

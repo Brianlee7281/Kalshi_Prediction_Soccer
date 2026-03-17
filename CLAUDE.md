@@ -6,7 +6,7 @@ Cross-market soccer trading: Betfair/bookmaker consensus → edge vs Kalshi → 
 
 1. **Phase 1** (offline weekly): Train MMPP params → `production_params` table
 2. **Phase 2** (kickoff −65min): Backsolve intensities → GO/SKIP
-3. **Phase 3** (live 90min): OddsConsensus (primary) + MMPP model (fallback) → P_reference/sec
+3. **Phase 3** (live 90min): OddsConsensus + MMPP model + InPlayStrengthUpdater → P_reference/sec
 4. **Phase 4** (live 90min): Edge = P_reference − P_kalshi → Kelly → Kalshi orders
 
 Infra: Docker (1 container/match), PostgreSQL, Redis, FastAPI + React dashboard.

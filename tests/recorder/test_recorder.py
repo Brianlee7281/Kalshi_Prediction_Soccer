@@ -23,7 +23,7 @@ def test_recorder_creates_files(tmp_path: Path) -> None:
     assert (match_dir / "metadata.json").exists()
 
     # Verify metadata contents
-    with open(match_dir / "metadata.json") as f:
+    with open(match_dir / "metadata.json", encoding="utf-8") as f:
         meta = json.load(f)
     assert meta["match_id"] == "test_match"
     assert meta["record_counts"]["odds_api"] == 1
@@ -39,7 +39,7 @@ def test_recorder_ts_field(tmp_path: Path) -> None:
     rec.record_odds_api({"test": "data2"})
     rec.finalize()
 
-    with open(tmp_path / "test_match" / "odds_api.jsonl") as f:
+    with open(tmp_path / "test_match" / "odds_api.jsonl", encoding="utf-8") as f:
         line1 = json.loads(f.readline())
         line2 = json.loads(f.readline())
 

@@ -155,7 +155,7 @@ def parse_commentaries_dir(commentaries_dir: Path) -> list[dict]:
 
         for json_file in sorted(league_dir.glob("*.json")):
             try:
-                with open(json_file) as f:
+                with open(json_file, encoding="utf-8") as f:
                     data = json.load(f)
             except (json.JSONDecodeError, OSError) as e:
                 log.warning("json_parse_error", file=str(json_file), error=str(e))

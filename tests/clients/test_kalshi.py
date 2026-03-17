@@ -40,7 +40,7 @@ def test_sign_request_headers():
 
 def test_fixture_market_has_ticker():
     """Verify saved market fixture has expected fields."""
-    with open(FIXTURE_DIR / "kalshi_market.json") as f:
+    with open(FIXTURE_DIR / "kalshi_market.json", encoding="utf-8") as f:
         market = json.load(f)
     assert "ticker" in market
     assert market["ticker"].startswith("KXEPLGAME")
@@ -49,14 +49,14 @@ def test_fixture_market_has_ticker():
 
 def test_fixture_orderbook_structure():
     """Verify saved orderbook fixture has expected structure."""
-    with open(FIXTURE_DIR / "kalshi_orderbook.json") as f:
+    with open(FIXTURE_DIR / "kalshi_orderbook.json", encoding="utf-8") as f:
         ob = json.load(f)
     assert "orderbook_fp" in ob
 
 
 def test_fixture_trades_structure():
     """Verify saved trades fixture has expected fields."""
-    with open(FIXTURE_DIR / "kalshi_trades.json") as f:
+    with open(FIXTURE_DIR / "kalshi_trades.json", encoding="utf-8") as f:
         trades = json.load(f)
     assert isinstance(trades, list)
     if trades:

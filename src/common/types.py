@@ -150,6 +150,11 @@ class TickPayload(BaseModel):
     mu_H: float  # remaining expected home goals
     mu_A: float
 
+    # strength updater state
+    a_H_current: float  # current (possibly updated) home log-intensity
+    a_A_current: float  # current (possibly updated) away log-intensity
+    last_goal_type: str = "NEUTRAL"  # SURPRISE | EXPECTED | NEUTRAL
+
     # trading permission (Phase 3 decides, Phase 4 respects)
     order_allowed: bool
     cooldown: bool  # post-event cooldown active

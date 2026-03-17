@@ -22,7 +22,7 @@ def _create_recording(tmp_path: Path) -> Path:
         {"_ts": 3.0, "@status": "15", "localteam": {"@goals": "0"}, "visitorteam": {"@goals": "0"}},
         {"_ts": 6.0, "@status": "35", "localteam": {"@goals": "1"}, "visitorteam": {"@goals": "0"}},
     ]
-    with open(rec_dir / "goalserve.jsonl", "w") as f:
+    with open(rec_dir / "goalserve.jsonl", "w", encoding="utf-8") as f:
         for r in gs_records:
             f.write(json.dumps(r) + "\n")
 
@@ -35,12 +35,12 @@ def _create_recording(tmp_path: Path) -> Path:
             {"name": "home", "price": 1.90}, {"name": "draw", "price": 3.60}, {"name": "away", "price": 3.50},
         ]}]},
     ]
-    with open(rec_dir / "odds_api.jsonl", "w") as f:
+    with open(rec_dir / "odds_api.jsonl", "w", encoding="utf-8") as f:
         for r in odds_records:
             f.write(json.dumps(r) + "\n")
 
     # Metadata
-    with open(rec_dir / "metadata.json", "w") as f:
+    with open(rec_dir / "metadata.json", "w", encoding="utf-8") as f:
         json.dump({"match_id": "test_match", "duration_s": 10.0, "record_counts": {"goalserve": 3, "odds_api": 2}}, f)
 
     return rec_dir

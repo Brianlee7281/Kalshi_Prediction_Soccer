@@ -39,6 +39,8 @@ async def compute_mc_prices(
     mu_H, mu_A = compute_remaining_mu(model)
     model.mu_H = mu_H
     model.mu_A = mu_A
+    model.mu_H_elapsed = max(0.0, model.mu_H_at_kickoff - model.mu_H)
+    model.mu_A_elapsed = max(0.0, model.mu_A_at_kickoff - model.mu_A)
 
     # Prepare Q decomposition for mc_simulate_remaining
     Q_diag = np.diag(model.Q).copy()
