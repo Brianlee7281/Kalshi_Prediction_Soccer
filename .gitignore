@@ -1,0 +1,48 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.env
+keys/
+data/
+*.db
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+htmlcov/
+
+# Models
+*.xgb
+*.pkl
+*.pt
+
+# Logs
+*.log
+data/
+
+# Node (dashboard)
+node_modules/
+.next/
+out/
+
+# Docker
+docker-compose.override.yml

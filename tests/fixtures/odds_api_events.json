@@ -1,0 +1,107 @@
+[
+  {
+    "id": 68096896,
+    "home": "Brentford FC",
+    "away": "Wolverhampton Wanderers",
+    "homeId": 50,
+    "awayId": 3,
+    "date": "2026-03-16T20:00:00Z",
+    "sport": {
+      "name": "Football",
+      "slug": "football"
+    },
+    "league": {
+      "name": "England - Premier League",
+      "slug": "england-premier-league"
+    },
+    "status": "pending",
+    "scores": {
+      "home": 0,
+      "away": 0
+    }
+  },
+  {
+    "id": 61301119,
+    "home": "AFC Bournemouth",
+    "away": "Manchester United",
+    "homeId": 60,
+    "awayId": 35,
+    "date": "2026-03-20T20:00:00Z",
+    "sport": {
+      "name": "Football",
+      "slug": "football"
+    },
+    "league": {
+      "name": "England - Premier League",
+      "slug": "england-premier-league"
+    },
+    "status": "pending",
+    "scores": {
+      "home": 0,
+      "away": 0
+    }
+  },
+  {
+    "id": 61301123,
+    "home": "Brighton & Hove Albion",
+    "away": "Liverpool FC",
+    "homeId": 30,
+    "awayId": 44,
+    "date": "2026-03-21T12:30:00Z",
+    "sport": {
+      "name": "Football",
+      "slug": "football"
+    },
+    "league": {
+      "name": "England - Premier League",
+      "slug": "england-premier-league"
+    },
+    "status": "pending",
+    "scores": {
+      "home": 0,
+      "away": 0
+    }
+  },
+  {
+    "id": 61301127,
+    "home": "Fulham FC",
+    "away": "Burnley FC",
+    "homeId": 43,
+    "awayId": 6,
+    "date": "2026-03-21T15:00:00Z",
+    "sport": {
+      "name": "Football",
+      "slug": "football"
+    },
+    "league": {
+      "name": "England - Premier League",
+      "slug": "england-premier-league"
+    },
+    "status": "pending",
+    "scores": {
+      "home": 0,
+      "away": 0
+    }
+  },
+  {
+    "id": 61301125,
+    "home": "Everton FC",
+    "away": "Chelsea FC",
+    "homeId": 48,
+    "awayId": 38,
+    "date": "2026-03-21T17:30:00Z",
+    "sport": {
+      "name": "Football",
+      "slug": "football"
+    },
+    "league": {
+      "name": "England - Premier League",
+      "slug": "england-premier-league"
+    },
+    "status": "pending",
+    "scores": {
+      "home": 0,
+      "away": 0
+    }
+  }
+]

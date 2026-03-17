@@ -1,0 +1,551 @@
+"""Phase 2 Pipeline — Pre-match initialization.
+
+Runs at kickoff -65 minutes:
+  Load params → get market odds → backsolve a_H/a_A → sanity check → Phase2Result.
+
+Intensity prediction tier order:
+  Tier 1: Odds-API (Bet365 + Betfair Exchange) → backsolve
+  Tier 2: Pinnacle closing odds (football-data.co.uk) → backsolve
+  Tier 3: XGBoost (last resort ML)
+  Tier 4: League MLE (fallback when no odds available)
+"""
+
+from __future__ import annotations
+
+import json
+import pickle
+from datetime import datetime
+from pathlib import Path
+
+import asyncpg
+import numpy as np
+import structlog
+from scipy.optimize import minimize
+
+from src.calibration.step_1_3_ml_prior import compute_C_time
+from src.clients.kalshi import KalshiClient
+from src.clients.kalshi_ticker_matcher import match_fixtures_to_tickers
+from src.clients.odds_api import LEAGUE_SLUGS, OddsApiClient
+from src.common.config import Config
+from src.common.types import MarketProbs, Phase2Result
+
+log = structlog.get_logger(__name__)
+
+# League → Kalshi series prefix
+LEAGUE_PREFIXES: dict[int, str] = {
+    1204: "KXEPLGAME",
+    1399: "KXLALIGAGAME",
+    1269: "KXSERIEAGAME",
+    1229: "KXBUNDESLIGAGAME",
+    1221: "KXLIGUE1GAME",
+    1440: "KXMLSGAME",
+    1141: "KXBRASILEIROGAME",
+    1081: "KXARGPREMDIVGAME",
+}
+
+
+async def run_phase2(
+    match_id: str,
+    league_id: int,
+    home_team: str,
+    away_team: str,
+    kickoff_utc: datetime,
+    config: Config,
+) -> Phase2Result:
+    """Full Phase 2 pipeline. Runs at kickoff -65 minutes.
+
+    Steps:
+    1. Load active production_params for this league from DB
+    2. Collect pre-match odds (Odds-API first, then Pinnacle fallback)
+    3. Backsolve a_H, a_A from market odds (tiered fallback)
+    4. Compute mu_H, mu_A = exp(a_H) * C_time, exp(a_A) * C_time
+    5. Sanity check: compare model P(1x2) vs market implied probs
+    6. Match Kalshi tickers
+    7. Build and return Phase2Result
+    """
+    # Step 1: Load production params
+    params = await load_production_params(config, league_id)
+    if params is None:
+        log.error("phase2_no_params", league_id=league_id)
+        return _skip_result(
+            match_id, league_id, home_team, away_team, kickoff_utc,
+            reason="No production_params for league",
+        )
+
+    b = np.array(params["b"])
+    Q = np.array(params["Q"])
+    C_time = compute_C_time(b)
+    param_version = params["version"]
+
+    # Step 2: Collect pre-match odds from Odds-API
+    odds_api_implied: MarketProbs | None = None
+    league_slug = LEAGUE_SLUGS.get(str(league_id))
+    if league_slug and config.odds_api_key:
+        try:
+            odds_api_implied = await _fetch_market_odds(
+                config, league_slug, home_team, away_team,
+            )
+        except Exception as exc:
+            log.warning("phase2_odds_api_fetch_failed", error=str(exc))
+
+    # Step 3: Predict a_H, a_A (tiered fallback)
+    prediction_method: str
+    a_H: float
+    a_A: float
+    market_implied: MarketProbs | None = None
+
+    # Tier 1: Backsolve from Odds-API (Bet365 / Betfair Exchange)
+    if odds_api_implied is not None:
+        a_H, a_A = backsolve_intensities(odds_api_implied, b, Q)
+        prediction_method = "backsolve_odds_api"
+        market_implied = odds_api_implied
+        log.info("phase2_tier1_odds_api", a_H=a_H, a_A=a_A)
+    else:
+        # Tier 2: Backsolve from Pinnacle closing odds (football-data.co.uk)
+        pinnacle_implied = _fetch_pinnacle_odds(league_id, home_team, away_team)
+        if pinnacle_implied is not None:
+            a_H, a_A = backsolve_intensities(pinnacle_implied, b, Q)
+            prediction_method = "backsolve_pinnacle"
+            market_implied = pinnacle_implied
+            log.info("phase2_tier2_pinnacle", a_H=a_H, a_A=a_A)
+        else:
+            # Tier 3: XGBoost from DB blob
+            xgb_blob = params.get("xgb_model_blob")
+            xgb_ok = False
+            if xgb_blob:
+                try:
+                    models = pickle.loads(xgb_blob)
+                    feature_mask = params.get("feature_mask")
+                    n_features = len(feature_mask) if feature_mask else None
+                    features = _build_features_from_market(
+                        MarketProbs(home_win=0.40, draw=0.30, away_win=0.30),
+                        n_features,
+                    )
+                    a_H = float(models["home"].predict(np.array([features]))[0])
+                    a_A = float(models["away"].predict(np.array([features]))[0])
+                    prediction_method = "xgboost"
+                    xgb_ok = True
+                    log.info("phase2_tier3_xgboost", a_H=a_H, a_A=a_A)
+                except Exception as exc:
+                    log.warning("phase2_xgb_predict_failed", error=str(exc))
+
+            if not xgb_ok:
+                # Tier 4: League average MLE
+                a_H, a_A = _league_mle(C_time)
+                prediction_method = "league_mle"
+                log.info("phase2_tier4_league_mle", a_H=a_H, a_A=a_A)
+
+    # Step 4: Compute mu
+    mu_H = float(np.exp(a_H) * C_time)
+    mu_A = float(np.exp(a_A) * C_time)
+
+    # Step 5: Sanity check
+    model_probs = _compute_model_probs(mu_H, mu_A)
+    verdict, skip_reason = sanity_check(model_probs, market_implied)
+
+    # Step 6: Kalshi ticker matching
+    kalshi_tickers: dict[str, str] = {}
+    prefix = LEAGUE_PREFIXES.get(league_id)
+    if prefix and config.kalshi_api_key:
+        try:
+            kalshi_client = KalshiClient(
+                api_key=config.kalshi_api_key,
+                private_key_path=config.kalshi_private_key_path,
+            )
+            fixtures = [{
+                "match_id": match_id,
+                "home_team": home_team,
+                "away_team": away_team,
+                "kickoff_utc": kickoff_utc,
+            }]
+            matched = await match_fixtures_to_tickers(fixtures, kalshi_client, prefix)
+            kalshi_tickers = matched.get(match_id, {})
+            await kalshi_client.close()
+        except Exception as exc:
+            log.warning("phase2_ticker_match_failed", error=str(exc))
+
+    # Step 7: Build Phase2Result
+    return Phase2Result(
+        match_id=match_id,
+        league_id=league_id,
+        a_H=a_H,
+        a_A=a_A,
+        mu_H=mu_H,
+        mu_A=mu_A,
+        C_time=C_time,
+        verdict=verdict,
+        skip_reason=skip_reason,
+        param_version=param_version,
+        home_team=home_team,
+        away_team=away_team,
+        kickoff_utc=kickoff_utc,
+        kalshi_tickers=kalshi_tickers,
+        market_implied=market_implied,
+        prediction_method=prediction_method,
+    )
+
+
+async def load_production_params(config: Config, league_id: int) -> dict | None:
+    """Load active production_params row for league from DB.
+
+    Returns dict with Q, b, gamma_H, gamma_A, delta_H, delta_A, sigma_a,
+    xgb_model_blob, feature_mask, version.
+    """
+    dsn = (
+        f"postgresql://{config.db_user}:{config.db_password}"
+        f"@{config.db_host}:{config.db_port}/{config.db_name}"
+    )
+    try:
+        conn = await asyncpg.connect(dsn)
+    except Exception as exc:
+        log.error("phase2_db_connect_failed", error=str(exc))
+        return None
+
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT version, league_id, Q, b,
+                   gamma_H, gamma_A, delta_H, delta_A,
+                   sigma_a, xgb_model_blob, feature_mask,
+                   trained_at, match_count, brier_score
+            FROM production_params
+            WHERE league_id = $1 AND is_active = TRUE
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            league_id,
+        )
+        if row is None:
+            return None
+
+        return {
+            "version": row["version"],
+            "league_id": row["league_id"],
+            "Q": json.loads(row["q"]),
+            "b": json.loads(row["b"]),
+            "gamma_H": row["gamma_h"],
+            "gamma_A": row["gamma_a"],
+            "delta_H": row["delta_h"],
+            "delta_A": row["delta_a"],
+            "sigma_a": row["sigma_a"],
+            "xgb_model_blob": row["xgb_model_blob"],
+            "feature_mask": json.loads(row["feature_mask"]) if row["feature_mask"] else None,
+            "trained_at": row["trained_at"],
+            "match_count": row["match_count"],
+            "brier_score": row["brier_score"],
+        }
+    finally:
+        await conn.close()
+
+
+def backsolve_intensities(
+    odds_implied: MarketProbs,
+    b: np.ndarray,
+    Q: np.ndarray,
+) -> tuple[float, float]:
+    """Backsolve a_H, a_A from market-implied probabilities.
+
+    Given P(home_win), P(draw), P(away_win), find a_H, a_A that produce
+    those probabilities via the Poisson model. Uses scipy.optimize.minimize
+    with an informed initial guess from implied expected goals.
+
+    Initial guess:
+      implied_home_goals ≈ 1.5 * home_win + 1.0 * draw + 0.5 * away_win
+      implied_away_goals ≈ 0.5 * home_win + 1.0 * draw + 1.5 * away_win
+      a_H_0 = ln(implied_home_goals / C_time)
+      a_A_0 = ln(implied_away_goals / C_time)
+    """
+    C_time = compute_C_time(b)
+
+    def objective(params: np.ndarray) -> float:
+        a_h, a_a = params
+        mu_h = np.exp(a_h) * C_time
+        mu_a = np.exp(a_a) * C_time
+        probs = _poisson_1x2(mu_h, mu_a)
+        return float(
+            (probs[0] - odds_implied.home_win) ** 2
+            + (probs[1] - odds_implied.draw) ** 2
+            + (probs[2] - odds_implied.away_win) ** 2
+        )
+
+    # Informed initial guess from implied expected goals
+    p_h = odds_implied.home_win
+    p_d = odds_implied.draw
+    p_a = odds_implied.away_win
+    implied_home_goals = max(0.3, 1.5 * p_h + 1.0 * p_d + 0.5 * p_a)
+    implied_away_goals = max(0.3, 0.5 * p_h + 1.0 * p_d + 1.5 * p_a)
+    a_H_0 = float(np.log(implied_home_goals / C_time))
+    a_A_0 = float(np.log(implied_away_goals / C_time))
+
+    x0 = np.array([a_H_0, a_A_0])
+    result = minimize(objective, x0, method="Nelder-Mead", options={"maxiter": 2000})
+    return float(result.x[0]), float(result.x[1])
+
+
+def sanity_check(
+    model_probs: MarketProbs,
+    market_probs: MarketProbs | None,
+    threshold: float = 0.15,
+) -> tuple[str, str | None]:
+    """Compare model vs market probabilities.
+
+    Returns ("GO", None) or ("SKIP", "reason string").
+    """
+    if market_probs is None:
+        return ("GO", None)
+
+    deviations = [
+        abs(model_probs.home_win - market_probs.home_win),
+        abs(model_probs.draw - market_probs.draw),
+        abs(model_probs.away_win - market_probs.away_win),
+    ]
+    max_dev = max(deviations)
+
+    if max_dev > threshold:
+        labels = ["home_win", "draw", "away_win"]
+        worst = labels[deviations.index(max_dev)]
+        reason = (
+            f"max deviation {max_dev:.3f} > {threshold} on {worst}: "
+            f"model={getattr(model_probs, worst):.3f} "
+            f"market={getattr(market_probs, worst):.3f}"
+        )
+        log.warning("phase2_sanity_fail", reason=reason)
+        return ("SKIP", reason)
+
+    return ("GO", None)
+
+
+# ─── Helpers ─────────────────────────────────────────────────
+
+
+def _poisson_1x2(mu_h: float, mu_a: float, max_goals: int = 10) -> tuple[float, float, float]:
+    """Compute P(home_win), P(draw), P(away_win) from independent Poisson."""
+    from scipy.stats import poisson
+
+    p_home = 0.0
+    p_draw = 0.0
+    p_away = 0.0
+    for i in range(max_goals + 1):
+        for j in range(max_goals + 1):
+            p = poisson.pmf(i, mu_h) * poisson.pmf(j, mu_a)
+            if i > j:
+                p_home += p
+            elif i == j:
+                p_draw += p
+            else:
+                p_away += p
+    return (p_home, p_draw, p_away)
+
+
+def _compute_model_probs(mu_H: float, mu_A: float) -> MarketProbs:
+    """Convert mu_H, mu_A to 1x2 probabilities via Poisson."""
+    p_h, p_d, p_a = _poisson_1x2(mu_H, mu_A)
+    return MarketProbs(home_win=p_h, draw=p_d, away_win=p_a)
+
+
+def _league_mle(C_time: float) -> tuple[float, float]:
+    """Default league-average log-intensities (≈1.4 home, ≈1.1 away)."""
+    a_H = float(np.log(1.4 / C_time))
+    a_A = float(np.log(1.1 / C_time))
+    return a_H, a_A
+
+
+def _build_features_from_market(
+    market: MarketProbs, n_features: int | None = None,
+) -> list[float]:
+    """Build feature vector from market odds for XGBoost prediction.
+
+    Adapts to the model's expected feature count (from feature_mask).
+    Fills bookmaker slots with market-implied probs, team form with defaults.
+    """
+    h, d, a = market.home_win, market.draw, market.away_win
+
+    if n_features is not None:
+        # Compute how many 3-prob bookmaker slots fit, then add 2 form features
+        n_bookie_slots = (n_features - 2) // 3 if n_features > 2 else 0
+        features = [h, d, a] * n_bookie_slots + [1.4, 1.1]
+        # Trim or pad to exact size
+        features = features[:n_features]
+        while len(features) < n_features:
+            features.append(0.0)
+        return features
+
+    # Default 20-feature layout
+    features = [h, d, a] * 6 + [1.4, 1.1]
+    return features
+
+
+async def _fetch_market_odds(
+    config: Config,
+    league_slug: str,
+    home_team: str,
+    away_team: str,
+) -> MarketProbs | None:
+    """Fetch pre-match odds from Odds-API and return vig-removed implied probs."""
+    from src.calibration.team_aliases import normalize_team_name
+
+    client = OddsApiClient(api_key=config.odds_api_key)
+    try:
+        events = await client.get_events(league_slug, status="pending")
+        home_norm = normalize_team_name(home_team)
+        away_norm = normalize_team_name(away_team)
+
+        target_event = None
+        for evt in events:
+            if (
+                normalize_team_name(evt.get("home", "")) == home_norm
+                and normalize_team_name(evt.get("away", "")) == away_norm
+            ):
+                target_event = evt
+                break
+
+        if target_event is None:
+            log.warning("phase2_event_not_found", home=home_team, away=away_team)
+            return None
+
+        odds_data = await client.get_odds(
+            target_event["id"], bookmakers="Bet365,Betfair Exchange",
+        )
+
+        return _extract_implied_probs(odds_data)
+    finally:
+        await client.close()
+
+
+def _fetch_pinnacle_odds(
+    league_id: int,
+    home_team: str,
+    away_team: str,
+) -> MarketProbs | None:
+    """Fetch Pinnacle closing odds from football-data.co.uk CSV files.
+
+    Looks for the most recent match with matching teams in the historical
+    odds data directory. Returns vig-removed implied probs or None.
+    """
+    from src.calibration.team_aliases import normalize_team_name
+
+    # League ID → football-data.co.uk CSV directory name
+    league_csv_dirs: dict[int, str] = {
+        1204: "E0",   # EPL
+        1399: "SP1",  # La Liga
+        1269: "I1",   # Serie A
+        1229: "D1",   # Bundesliga
+        1221: "F1",   # Ligue 1
+    }
+    csv_dir = league_csv_dirs.get(league_id)
+    if csv_dir is None:
+        return None
+
+    odds_dir = Path("data/odds_historical")
+    if not odds_dir.exists():
+        return None
+
+    home_norm = normalize_team_name(home_team)
+    away_norm = normalize_team_name(away_team)
+
+    # Search CSV files (most recent season first)
+    csv_files = sorted(odds_dir.glob(f"{csv_dir}*.csv"), reverse=True)
+    for csv_path in csv_files:
+        try:
+            import csv
+            with open(csv_path, encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    row_home = normalize_team_name(row.get("HomeTeam", ""))
+                    row_away = normalize_team_name(row.get("AwayTeam", ""))
+                    if row_home != home_norm or row_away != away_norm:
+                        continue
+
+                    # Look for Pinnacle closing odds columns
+                    try:
+                        ph = float(row.get("PSH") or row.get("PH", "0"))
+                        pd = float(row.get("PSD") or row.get("PD", "0"))
+                        pa = float(row.get("PSA") or row.get("PA", "0"))
+                    except (ValueError, TypeError):
+                        continue
+
+                    if ph <= 0 or pd <= 0 or pa <= 0:
+                        continue
+
+                    # Remove vig
+                    raw_h, raw_d, raw_a = 1.0 / ph, 1.0 / pd, 1.0 / pa
+                    total = raw_h + raw_d + raw_a
+                    log.info(
+                        "phase2_pinnacle_found",
+                        home=home_team,
+                        away=away_team,
+                        csv=csv_path.name,
+                    )
+                    return MarketProbs(
+                        home_win=raw_h / total,
+                        draw=raw_d / total,
+                        away_win=raw_a / total,
+                    )
+        except Exception as exc:
+            log.warning("phase2_pinnacle_csv_error", csv=str(csv_path), error=str(exc))
+            continue
+
+    return None
+
+
+def _extract_implied_probs(odds_data: dict) -> MarketProbs | None:
+    """Extract vig-removed 1x2 implied probs from Odds-API response."""
+    bookmakers = odds_data.get("bookmakers", {})
+    if not bookmakers:
+        return None
+
+    # Try Bet365 first, then Betfair Exchange
+    for bookie_name in ["Bet365", "Betfair Exchange"]:
+        markets = bookmakers.get(bookie_name, [])
+        for market in markets:
+            if market.get("name") == "ML":
+                odds_list = market.get("odds", [])
+                if odds_list:
+                    o = odds_list[0]
+                    try:
+                        h = float(o["home"])
+                        d = float(o["draw"])
+                        a = float(o["away"])
+                        # Remove vig
+                        raw_h, raw_d, raw_a = 1.0 / h, 1.0 / d, 1.0 / a
+                        total = raw_h + raw_d + raw_a
+                        return MarketProbs(
+                            home_win=raw_h / total,
+                            draw=raw_d / total,
+                            away_win=raw_a / total,
+                        )
+                    except (KeyError, ValueError, ZeroDivisionError):
+                        continue
+    return None
+
+
+def _skip_result(
+    match_id: str,
+    league_id: int,
+    home_team: str,
+    away_team: str,
+    kickoff_utc: datetime,
+    reason: str,
+) -> Phase2Result:
+    """Build a SKIP Phase2Result with default values."""
+    b = np.zeros(6)
+    C_time = compute_C_time(b)
+    a_H, a_A = _league_mle(C_time)
+    return Phase2Result(
+        match_id=match_id,
+        league_id=league_id,
+        a_H=a_H,
+        a_A=a_A,
+        mu_H=float(np.exp(a_H) * C_time),
+        mu_A=float(np.exp(a_A) * C_time),
+        C_time=C_time,
+        verdict="SKIP",
+        skip_reason=reason,
+        param_version=0,
+        home_team=home_team,
+        away_team=away_team,
+        kickoff_utc=kickoff_utc,
+        kalshi_tickers={},
+        market_implied=None,
+        prediction_method="league_mle",
+    )
