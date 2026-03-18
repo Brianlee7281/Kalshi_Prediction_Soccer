@@ -165,3 +165,23 @@ def test_multi_goal_detection() -> None:
     away_goals = [e for e in goal_events2 if e["team"] == "away"]
     assert len(home_goals) == 1
     assert len(away_goals) == 2
+
+
+def test_handle_penalty() -> None:
+    """Penalty sets PENALTY_PENDING + ob_freeze."""
+    from src.engine.event_handlers import handle_penalty
+    model = _make_test_model()
+    handle_penalty(model, "home", 75)
+    assert model.event_state == "PENALTY_PENDING"
+    assert model.ob_freeze is True
+    assert model.order_allowed is False
+
+
+def test_handle_var_review() -> None:
+    """VAR review sets VAR_REVIEW + ob_freeze."""
+    from src.engine.event_handlers import handle_var_review
+    model = _make_test_model()
+    handle_var_review(model, 80)
+    assert model.event_state == "VAR_REVIEW"
+    assert model.ob_freeze is True
+    assert model.order_allowed is False

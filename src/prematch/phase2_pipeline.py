@@ -13,6 +13,7 @@ Intensity prediction tier order:
 from __future__ import annotations
 
 import json
+import math
 import pickle
 from datetime import datetime
 from pathlib import Path
@@ -164,6 +165,16 @@ async def run_phase2(
         except Exception as exc:
             log.warning("phase2_ticker_match_failed", error=str(exc))
 
+    # v5: EKF initial uncertainty — tier-dependent
+    ekf_P0_map = {
+        "backsolve_odds_api": 0.15,   # Tier 1: Betfair/Bet365, high confidence
+        "backsolve_pinnacle": 0.20,   # Tier 2: Pinnacle CSV, medium confidence
+        "xgboost": 0.25,              # Tier 3: ML prior, medium-high uncertainty
+        "form_mle": 0.35,             # Form-based: lower confidence
+        "league_mle": 0.50,           # Tier 4: league average, lowest confidence
+    }
+    ekf_P0 = ekf_P0_map.get(prediction_method, 0.25)
+
     # Step 7: Build Phase2Result
     return Phase2Result(
         match_id=match_id,
@@ -182,6 +193,7 @@ async def run_phase2(
         kalshi_tickers=kalshi_tickers,
         market_implied=market_implied,
         prediction_method=prediction_method,
+        ekf_P0=ekf_P0,
     )
 
 
@@ -189,7 +201,9 @@ async def load_production_params(config: Config, league_id: int) -> dict | None:
     """Load active production_params row for league from DB.
 
     Returns dict with Q, b, gamma_H, gamma_A, delta_H, delta_A, sigma_a,
-    xgb_model_blob, feature_mask, version.
+    xgb_model_blob, feature_mask, version, and v5 fields.
+
+    Backward compatible: old rows without v5 columns get sensible defaults.
     """
     dsn = (
         f"postgresql://{config.db_user}:{config.db_password}"
@@ -207,7 +221,16 @@ async def load_production_params(config: Config, league_id: int) -> dict | None:
             SELECT version, league_id, Q, b,
                    gamma_H, gamma_A, delta_H, delta_A,
                    sigma_a, xgb_model_blob, feature_mask,
-                   trained_at, match_count, brier_score
+                   trained_at, match_count, brier_score,
+                   COALESCE(delta_H_pos, NULL) as delta_H_pos,
+                   COALESCE(delta_H_neg, NULL) as delta_H_neg,
+                   COALESCE(delta_A_pos, NULL) as delta_A_pos,
+                   COALESCE(delta_A_neg, NULL) as delta_A_neg,
+                   COALESCE(eta_H, 0.0) as eta_H,
+                   COALESCE(eta_A, 0.0) as eta_A,
+                   COALESCE(eta_H2, 0.0) as eta_H2,
+                   COALESCE(eta_A2, 0.0) as eta_A2,
+                   COALESCE(sigma_omega_sq, 0.01) as sigma_omega_sq
             FROM production_params
             WHERE league_id = $1 AND is_active = TRUE
             ORDER BY version DESC
@@ -223,19 +246,69 @@ async def load_production_params(config: Config, league_id: int) -> dict | None:
             "league_id": row["league_id"],
             "Q": json.loads(row["q"]),
             "b": json.loads(row["b"]),
-            "gamma_H": row["gamma_h"],
-            "gamma_A": row["gamma_a"],
-            "delta_H": row["delta_h"],
-            "delta_A": row["delta_a"],
+            "gamma_H": _parse_gamma(row["gamma_h"], "home"),
+            "gamma_A": _parse_gamma(row["gamma_a"], "away"),
+            "delta_H": _parse_delta(row["delta_h"]),
+            "delta_A": _parse_delta(row["delta_a"]),
             "sigma_a": row["sigma_a"],
             "xgb_model_blob": row["xgb_model_blob"],
             "feature_mask": json.loads(row["feature_mask"]) if row["feature_mask"] else None,
             "trained_at": row["trained_at"],
             "match_count": row["match_count"],
             "brier_score": row["brier_score"],
+            # v5 fields
+            "delta_H_pos": _parse_json_array(row["delta_h_pos"]),
+            "delta_H_neg": _parse_json_array(row["delta_h_neg"]),
+            "delta_A_pos": _parse_json_array(row["delta_a_pos"]),
+            "delta_A_neg": _parse_json_array(row["delta_a_neg"]),
+            "eta_H": float(row["eta_h"]),
+            "eta_A": float(row["eta_a"]),
+            "eta_H2": float(row["eta_h2"]),
+            "eta_A2": float(row["eta_a2"]),
+            "sigma_omega_sq": float(row["sigma_omega_sq"]),
         }
     finally:
         await conn.close()
+
+
+def _parse_gamma(value: object, team: str) -> list[float]:
+    """Parse gamma from DB — JSON string (new) or float scalar (old).
+
+    Old schema stored a single float (gamma_H[1] or gamma_A[2]).
+    New schema stores the full 4-element JSON array.
+    """
+    if isinstance(value, str):
+        return json.loads(value)
+    # Old scalar: reconstruct [0, val, -val, 0] shape (4,)
+    val = float(value)
+    if team == "home":
+        # gamma_H was stored as gamma_H[1]; state 2 gets -val
+        return [0.0, val, -val, 0.0]
+    else:
+        # gamma_A was stored as gamma_A[2]; state 1 gets -val
+        return [0.0, -val, val, 0.0]
+
+
+def _parse_delta(value: object) -> list[float]:
+    """Parse delta from DB — JSON string (new) or float scalar (old).
+
+    Old schema stored delta[2] (the ΔS=0 bin value).
+    New schema stores the full 5-element JSON array.
+    """
+    if isinstance(value, str):
+        return json.loads(value)
+    # Old scalar: place the value in all non-reference bins as a rough default
+    val = float(value)
+    return [val, val, val, val, val]
+
+
+def _parse_json_array(value: object) -> list[float] | None:
+    """Parse a nullable JSON array column. Returns list or None."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return json.loads(value)
+    return None
 
 
 def backsolve_intensities(
@@ -467,9 +540,7 @@ def _fetch_pinnacle_odds(
                     if ph <= 0 or pd <= 0 or pa <= 0:
                         continue
 
-                    # Remove vig
-                    raw_h, raw_d, raw_a = 1.0 / ph, 1.0 / pd, 1.0 / pa
-                    total = raw_h + raw_d + raw_a
+                    p_h, p_d, p_a = _shin_vig_removal(ph, pd, pa)
                     log.info(
                         "phase2_pinnacle_found",
                         home=home_team,
@@ -477,9 +548,9 @@ def _fetch_pinnacle_odds(
                         csv=csv_path.name,
                     )
                     return MarketProbs(
-                        home_win=raw_h / total,
-                        draw=raw_d / total,
-                        away_win=raw_a / total,
+                        home_win=p_h,
+                        draw=p_d,
+                        away_win=p_a,
                     )
         except Exception as exc:
             log.warning("phase2_pinnacle_csv_error", csv=str(csv_path), error=str(exc))
@@ -506,17 +577,54 @@ def _extract_implied_probs(odds_data: dict) -> MarketProbs | None:
                         h = float(o["home"])
                         d = float(o["draw"])
                         a = float(o["away"])
-                        # Remove vig
-                        raw_h, raw_d, raw_a = 1.0 / h, 1.0 / d, 1.0 / a
-                        total = raw_h + raw_d + raw_a
+                        p_h, p_d, p_a = _shin_vig_removal(h, d, a)
                         return MarketProbs(
-                            home_win=raw_h / total,
-                            draw=raw_d / total,
-                            away_win=raw_a / total,
+                            home_win=p_h,
+                            draw=p_d,
+                            away_win=p_a,
                         )
                     except (KeyError, ValueError, ZeroDivisionError):
                         continue
     return None
+
+
+def _shin_vig_removal(
+    odds_h: float, odds_d: float, odds_a: float,
+) -> tuple[float, float, float]:
+    """Shin method: recover true probabilities from bookmaker odds.
+
+    Unlike naive normalization (1/odds / sum), Shin models informed
+    insider trading to correctly handle favourite-longshot bias.
+    Favorites get slightly higher probability; longshots get lower.
+
+    Reference: Shin (1992, 1993), Jullien & Salanié (1994).
+
+    Solves for z in: Σ sqrt(z² + 4(1-z)·π_i²) = 2(1-z)/O + 3z
+    Then: p_i = O·(sqrt(z² + 4(1-z)·π_i²) - z) / (2(1-z))
+    where π_i = (1/odds_i) / O, O = Σ(1/odds_i).
+    """
+    q = [1.0 / odds_h, 1.0 / odds_d, 1.0 / odds_a]
+    O = sum(q)
+    pi = [qi / O for qi in q]
+
+    # Bisection to find z ∈ (0, 1)
+    lo, hi = 0.0, 0.99
+    for _ in range(64):
+        z = (lo + hi) / 2.0
+        lhs = sum(math.sqrt(z * z + 4.0 * (1.0 - z) * p * p) for p in pi)
+        rhs = 2.0 * (1.0 - z) / O + 3.0 * z
+        if lhs > rhs:
+            lo = z
+        else:
+            hi = z
+    z = (lo + hi) / 2.0
+
+    denom = 2.0 * (1.0 - z)
+    probs = [
+        O * (math.sqrt(z * z + 4.0 * (1.0 - z) * p * p) - z) / denom
+        for p in pi
+    ]
+    return probs[0], probs[1], probs[2]
 
 
 def _skip_result(

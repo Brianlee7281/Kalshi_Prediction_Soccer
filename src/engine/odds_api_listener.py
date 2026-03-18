@@ -1,8 +1,13 @@
 """Odds-API WebSocket listener — feeds live bookmaker odds into OddsConsensus.
 
-Connects to the Odds-API live WS endpoint, parses ML (moneyline) odds
-updates, converts to implied probabilities with vig removal, and updates
-the model's OddsConsensus on each message.
+DEPRECATED (v5 migration): In v5, OddsConsensus is removed. This module
+will be demoted to a recording-only logger in Sprint 3 (Task 3.13).
+P_model is the sole trading authority — bookmaker odds are recorded for
+post-match analysis only, not used for live trading decisions.
+
+Current behavior (v4): Connects to the Odds-API live WS endpoint, parses
+ML (moneyline) odds updates, converts to implied probabilities with vig
+removal, and updates the model's OddsConsensus on each message.
 """
 
 from __future__ import annotations

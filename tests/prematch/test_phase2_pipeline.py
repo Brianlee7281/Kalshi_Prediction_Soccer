@@ -135,3 +135,31 @@ async def test_load_production_params():
         assert len(params["b"]) == 6
     else:
         pytest.skip("DB not available or no params for league 1204")
+
+
+def test_ekf_P0_by_prediction_method():
+    """Phase2Result.ekf_P0 defaults to 0.25 and can be set explicitly."""
+    from src.common.types import Phase2Result
+
+    # Default (not specified)
+    r = Phase2Result(
+        match_id="m1", league_id=1, a_H=-4.0, a_A=-4.2,
+        mu_H=1.5, mu_A=1.1, C_time=90.0, verdict="GO",
+        skip_reason=None, param_version=1, home_team="A",
+        away_team="B", kickoff_utc="2026-03-15T15:00:00Z",
+        kalshi_tickers={}, market_implied=None,
+        prediction_method="league_mle",
+    )
+    assert r.ekf_P0 == 0.25  # default
+
+    # Explicit Tier 1 value
+    r2 = Phase2Result(
+        match_id="m2", league_id=1, a_H=-4.0, a_A=-4.2,
+        mu_H=1.5, mu_A=1.1, C_time=90.0, verdict="GO",
+        skip_reason=None, param_version=1, home_team="A",
+        away_team="B", kickoff_utc="2026-03-15T15:00:00Z",
+        kalshi_tickers={}, market_implied=None,
+        prediction_method="backsolve_odds_api",
+        ekf_P0=0.15,
+    )
+    assert r2.ekf_P0 == 0.15

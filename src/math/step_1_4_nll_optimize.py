@@ -4,6 +4,8 @@ Jointly optimizes time profile b, red-card penalties gamma, score-difference
 effects delta, and match-level baseline intensities a_H/a_A via PyTorch
 gradient descent on the Poisson negative log-likelihood.
 
+Uses CUDA GPU when available for vectorized NLL computation.
+
 Reference: docs/phase1.md Step 1.4
 """
 
@@ -16,6 +18,9 @@ import torch
 import torch.nn as nn
 
 from src.common.types import IntervalRecord
+
+# Auto-detect CUDA for PyTorch
+_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -174,6 +179,102 @@ def prepare_match_data(
 
 
 # ---------------------------------------------------------------------------
+# Vectorized index tensors for GPU-accelerated NLL
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BatchedIndices:
+    """Pre-built index tensors for vectorized NLL computation.
+
+    All tensors are 1-D and on the target device (CPU or CUDA).
+    Built once from match_data, reused every epoch.
+    """
+
+    # Integration term: one entry per interval across all matches
+    iv_match_idx: torch.Tensor   # (I,) int64 — match index
+    iv_basis_idx: torch.Tensor   # (I,) int64 — basis function index
+    iv_state_X: torch.Tensor     # (I,) int64 — red-card state
+    iv_ds_bin: torch.Tensor      # (I,) int64 — ΔS bin
+    iv_duration: torch.Tensor    # (I,) float32 — interval duration
+
+    # Point events: home goals
+    hg_match_idx: torch.Tensor   # (G_H,) int64
+    hg_basis_idx: torch.Tensor   # (G_H,) int64
+    hg_state_X: torch.Tensor     # (G_H,) int64
+    hg_ds_bin: torch.Tensor      # (G_H,) int64
+
+    # Point events: away goals
+    ag_match_idx: torch.Tensor   # (G_A,) int64
+    ag_basis_idx: torch.Tensor   # (G_A,) int64
+    ag_state_X: torch.Tensor     # (G_A,) int64
+    ag_ds_bin: torch.Tensor      # (G_A,) int64
+
+
+def build_batched_indices(
+    match_data: list[MatchData],
+    device: torch.device | None = None,
+) -> BatchedIndices:
+    """Flatten all intervals and goal events into index tensors.
+
+    Called once before the optimization loop. The returned tensors
+    are moved to the specified device (defaults to _DEVICE).
+    """
+    if device is None:
+        device = _DEVICE
+
+    # Collect intervals
+    iv_m, iv_b, iv_s, iv_d, iv_dur = [], [], [], [], []
+    for md in match_data:
+        for iv in md.intervals:
+            iv_m.append(md.match_idx)
+            iv_b.append(iv.basis_idx)
+            iv_s.append(iv.state_X)
+            iv_d.append(iv.ds_bin)
+            iv_dur.append(iv.duration)
+
+    # Collect home goal events
+    hg_m, hg_b, hg_s, hg_d = [], [], [], []
+    for md in match_data:
+        for ge in md.home_goal_log_lambdas:
+            hg_m.append(md.match_idx)
+            hg_b.append(ge.basis_idx)
+            hg_s.append(ge.state_X)
+            hg_d.append(ge.ds_bin)
+
+    # Collect away goal events
+    ag_m, ag_b, ag_s, ag_d = [], [], [], []
+    for md in match_data:
+        for ge in md.away_goal_log_lambdas:
+            ag_m.append(md.match_idx)
+            ag_b.append(ge.basis_idx)
+            ag_s.append(ge.state_X)
+            ag_d.append(ge.ds_bin)
+
+    def _to_long(lst: list[int]) -> torch.Tensor:
+        return torch.tensor(lst, dtype=torch.long, device=device) if lst else torch.empty(0, dtype=torch.long, device=device)
+
+    def _to_float(lst: list[float]) -> torch.Tensor:
+        return torch.tensor(lst, dtype=torch.float32, device=device) if lst else torch.empty(0, dtype=torch.float32, device=device)
+
+    return BatchedIndices(
+        iv_match_idx=_to_long(iv_m),
+        iv_basis_idx=_to_long(iv_b),
+        iv_state_X=_to_long(iv_s),
+        iv_ds_bin=_to_long(iv_d),
+        iv_duration=_to_float(iv_dur),
+        hg_match_idx=_to_long(hg_m),
+        hg_basis_idx=_to_long(hg_b),
+        hg_state_X=_to_long(hg_s),
+        hg_ds_bin=_to_long(hg_d),
+        ag_match_idx=_to_long(ag_m),
+        ag_basis_idx=_to_long(ag_b),
+        ag_state_X=_to_long(ag_s),
+        ag_ds_bin=_to_long(ag_d),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Parametric delta function
 # ---------------------------------------------------------------------------
 
@@ -279,7 +380,8 @@ class MMPPModel(nn.Module):
         """
         g1 = self.gamma_H_raw[0].clamp(-1.5, 0.0)
         g2 = self.gamma_H_raw[1].clamp(0.0, 1.5)
-        return torch.stack([torch.tensor(0.0), g1, g2, g1 + g2])
+        zero = torch.zeros(1, device=g1.device).squeeze()
+        return torch.stack([zero, g1, g2, g1 + g2])
 
     def get_gamma_A(self) -> torch.Tensor:
         """Build 4-element γ^A vector with clamping.
@@ -289,7 +391,8 @@ class MMPPModel(nn.Module):
         """
         g1 = self.gamma_A_raw[0].clamp(0.0, 1.5)
         g2 = self.gamma_A_raw[1].clamp(-1.5, 0.0)
-        return torch.stack([torch.tensor(0.0), g1, g2, g1 + g2])
+        zero = torch.zeros(1, device=g1.device).squeeze()
+        return torch.stack([zero, g1, g2, g1 + g2])
 
     def get_b_clamped(self) -> torch.Tensor:
         """Return b with clamping to [-0.5, 0.5]."""
@@ -317,14 +420,14 @@ class MMPPModel(nn.Module):
 
     def get_delta_H(self) -> torch.Tensor:
         """Compute 5-element δ_H lookup [ΔS = -2, -1, 0, +1, +2]."""
-        s = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+        s = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0], device=self.beta_H.device)
         return parametric_delta(
             s, self.get_beta_H_clamped(), self.get_kappa_H_clamped(), self.get_tau_H(),
         )
 
     def get_delta_A(self) -> torch.Tensor:
         """Compute 5-element δ_A lookup [ΔS = -2, -1, 0, +1, +2]."""
-        s = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+        s = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0], device=self.beta_A.device)
         return parametric_delta(
             s, self.get_beta_A_clamped(), self.get_kappa_A_clamped(), self.get_tau_A(),
         )
@@ -367,23 +470,100 @@ def compute_nll(
     *,
     sigma_a: float = _DEFAULT_SIGMA_A,
     lambda_reg: float = _DEFAULT_LAMBDA_REG,
+    _batched: BatchedIndices | None = None,
 ) -> torch.Tensor:
-    """Compute the full NLL loss over all matches.
+    """Compute the full NLL loss over all matches (vectorized).
 
     Loss = -Σ_m [Σ_g ln λ_H(t_g) + Σ_g ln λ_A(t_g) - Σ_k (μ^H_k + μ^A_k)]
            + (1/2σ²_a) Σ_m [(a^m_H - a^m_init_H)² + (a^m_A - a^m_init_A)²]
            + λ_reg (||b||² + ||γ^H||² + ||γ^A||² + ||δ_H||² + ||δ_A||²)
+
+    When _batched is provided, uses fully vectorized GPU-accelerated
+    computation. Falls back to loop-based computation otherwise.
 
     Args:
         model: MMPPModel with current parameters.
         match_data: Pre-processed match data.
         sigma_a: Standard deviation for ML prior regularization.
         lambda_reg: L2 regularization coefficient.
+        _batched: Pre-built index tensors (internal, set by optimize_nll).
 
     Returns:
         Scalar loss tensor.
     """
-    # Precompute clamped parameters once
+    if _batched is not None:
+        return _compute_nll_vectorized(model, _batched, sigma_a=sigma_a, lambda_reg=lambda_reg)
+
+    # Fallback: loop-based (kept for backward compatibility)
+    return _compute_nll_loop(model, match_data, sigma_a=sigma_a, lambda_reg=lambda_reg)
+
+
+def _compute_nll_vectorized(
+    model: MMPPModel,
+    bi: BatchedIndices,
+    *,
+    sigma_a: float,
+    lambda_reg: float,
+) -> torch.Tensor:
+    """Fully vectorized NLL — single batch of tensor ops on GPU/CPU."""
+    b = model.get_b_clamped()
+    gamma_H = model.get_gamma_H()
+    gamma_A = model.get_gamma_A()
+    delta_H = model.get_delta_H()
+    delta_A = model.get_delta_A()
+
+    nll = torch.tensor(0.0, device=model.a_H.device)
+
+    # --- Integration term: all intervals at once ---
+    if bi.iv_match_idx.numel() > 0:
+        log_lam_H = (model.a_H[bi.iv_match_idx] + b[bi.iv_basis_idx]
+                     + gamma_H[bi.iv_state_X] + delta_H[bi.iv_ds_bin])
+        log_lam_A = (model.a_A[bi.iv_match_idx] + b[bi.iv_basis_idx]
+                     + gamma_A[bi.iv_state_X] + delta_A[bi.iv_ds_bin])
+        nll = nll + torch.sum((torch.exp(log_lam_H) + torch.exp(log_lam_A)) * bi.iv_duration)
+
+    # --- Point events: home goals ---
+    if bi.hg_match_idx.numel() > 0:
+        log_lam_hg = (model.a_H[bi.hg_match_idx] + b[bi.hg_basis_idx]
+                      + gamma_H[bi.hg_state_X] + delta_H[bi.hg_ds_bin])
+        nll = nll - torch.sum(log_lam_hg)
+
+    # --- Point events: away goals ---
+    if bi.ag_match_idx.numel() > 0:
+        log_lam_ag = (model.a_A[bi.ag_match_idx] + b[bi.ag_basis_idx]
+                      + gamma_A[bi.ag_state_X] + delta_A[bi.ag_ds_bin])
+        nll = nll - torch.sum(log_lam_ag)
+
+    # --- ML prior regularization ---
+    if sigma_a > 0:
+        inv_2sigma2 = 1.0 / (2.0 * sigma_a * sigma_a)
+        reg_a = inv_2sigma2 * (
+            torch.sum((model.a_H - model.a_H_init) ** 2)
+            + torch.sum((model.a_A - model.a_A_init) ** 2)
+        )
+        nll = nll + reg_a
+
+    # --- L2 regularization on structural parameters ---
+    reg_l2 = lambda_reg * (
+        torch.sum(b ** 2)
+        + torch.sum(gamma_H ** 2)
+        + torch.sum(gamma_A ** 2)
+        + torch.sum(delta_H ** 2)
+        + torch.sum(delta_A ** 2)
+    )
+    nll = nll + reg_l2
+
+    return nll
+
+
+def _compute_nll_loop(
+    model: MMPPModel,
+    match_data: list[MatchData],
+    *,
+    sigma_a: float,
+    lambda_reg: float,
+) -> torch.Tensor:
+    """Loop-based NLL (original implementation, CPU-only fallback)."""
     b = model.get_b_clamped()
     gamma_H = model.get_gamma_H()
     gamma_A = model.get_gamma_A()
@@ -395,7 +575,6 @@ def compute_nll(
     for md in match_data:
         m = md.match_idx
 
-        # --- Integration term: Σ_k (μ^H_k + μ^A_k) ---
         for iv in md.intervals:
             log_lam_H = model.a_H[m] + b[iv.basis_idx] + gamma_H[iv.state_X] + delta_H[iv.ds_bin]
             log_lam_A = model.a_A[m] + b[iv.basis_idx] + gamma_A[iv.state_X] + delta_A[iv.ds_bin]
@@ -403,7 +582,6 @@ def compute_nll(
             mu_A = torch.exp(log_lam_A) * iv.duration
             nll = nll + mu_H + mu_A
 
-        # --- Point-event term: -Σ_g ln λ ---
         for ge in md.home_goal_log_lambdas:
             log_lam = model.a_H[m] + b[ge.basis_idx] + gamma_H[ge.state_X] + delta_H[ge.ds_bin]
             nll = nll - log_lam
@@ -412,7 +590,6 @@ def compute_nll(
             log_lam = model.a_A[m] + b[ge.basis_idx] + gamma_A[ge.state_X] + delta_A[ge.ds_bin]
             nll = nll - log_lam
 
-    # --- ML prior regularization: (1/2σ²_a) Σ_m [(a_H - a_H_init)² + ...] ---
     if sigma_a > 0:
         inv_2sigma2 = 1.0 / (2.0 * sigma_a * sigma_a)
         a_H_init: torch.Tensor = model.a_H_init  # type: ignore[assignment]
@@ -423,7 +600,6 @@ def compute_nll(
         )
         nll = nll + reg_a
 
-    # --- L2 regularization on structural parameters ---
     reg_l2 = lambda_reg * (
         torch.sum(b ** 2)
         + torch.sum(gamma_H ** 2)
@@ -473,6 +649,8 @@ def optimize_nll(
 ) -> OptimizationResult:
     """Run Adam optimization on the joint NLL.
 
+    Uses CUDA GPU when available for vectorized NLL computation.
+
     Args:
         match_data: Pre-processed match data from prepare_match_data.
         a_H_init: Initial home log-intensities from XGBoost (shape M).
@@ -485,23 +663,30 @@ def optimize_nll(
     Returns:
         OptimizationResult with all fitted parameters and loss history.
     """
+    device = _DEVICE
     n_matches = len(a_H_init)
     model = MMPPModel(
         n_matches=n_matches,
         a_H_init=torch.tensor(a_H_init, dtype=torch.float32),
         a_A_init=torch.tensor(a_A_init, dtype=torch.float32),
     )
+    model = model.to(device)
+
+    # Pre-build vectorized index tensors (done once, reused every epoch)
+    batched = build_batched_indices(match_data, device=device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_history: list[float] = []
 
     for _epoch in range(num_epochs):
         optimizer.zero_grad()
-        loss = compute_nll(model, match_data, sigma_a=sigma_a, lambda_reg=lambda_reg)
+        loss = compute_nll(model, match_data, sigma_a=sigma_a, lambda_reg=lambda_reg, _batched=batched)
         loss.backward()  # type: ignore[no-untyped-call]
         optimizer.step()
         loss_history.append(float(loss.item()))
 
+    # Move model back to CPU for result extraction
+    model = model.to("cpu")
     return _extract_result(model, loss_history)
 
 

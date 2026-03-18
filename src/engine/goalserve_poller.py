@@ -97,6 +97,13 @@ async def goalserve_poller(model: LiveMatchModel) -> None:
                 elif etype == "period_change":
                     handle_period_change(model, event["new_phase"])
 
+            # v5: Extract live_stats for Layer 2 HMM/DomIndex
+            live_stats = _extract_live_stats(match_data)
+            if live_stats is not None:
+                hmm = getattr(model, "hmm_estimator", None)
+                if hmm is not None:
+                    hmm.update(live_stats, model.t)
+
             # Check for stoppage time announcement (second half, minute >= 85)
             inj_str = match_data.get("@inj_minute", "")
             if (
@@ -115,3 +122,20 @@ async def goalserve_poller(model: LiveMatchModel) -> None:
         await client.close()
 
     logger.info("goalserve_poller_finished", match_id=model.match_id)
+
+
+def _extract_live_stats(match_data: dict) -> dict | None:
+    """Extract live statistics from Goalserve poll for Layer 2."""
+    stats = match_data.get("stats", {})
+    if not stats:
+        return None
+    try:
+        return {
+            "shots_on_target_h": int(stats.get("shotsontarget", {}).get("localteam", 0)),
+            "shots_on_target_a": int(stats.get("shotsontarget", {}).get("visitorteam", 0)),
+            "corners_h": int(stats.get("corners", {}).get("localteam", 0)),
+            "corners_a": int(stats.get("corners", {}).get("visitorteam", 0)),
+            "possession_h": float(stats.get("possession", {}).get("localteam", 50)),
+        }
+    except (ValueError, TypeError, AttributeError):
+        return None

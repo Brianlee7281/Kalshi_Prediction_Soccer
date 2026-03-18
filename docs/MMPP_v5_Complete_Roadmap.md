@@ -53,15 +53,23 @@ specific biases have been documented in peer-reviewed research:
 
 When an underdog scores, the market overshoots. Participants overestimate how
 much the goal changes the game. The overreaction is largest immediately after
-the goal and decays exponentially over the next 5 minutes. The mathematical
-form of this decay is:
+the goal and decays over the next 5 minutes. Choi and Hui (2014) found that
+in Betfair's in-play market, the bias decreases by approximately 40% per
+minute after the first goal, with roughly 90% corrected by minute 5.
+
+This multiplicative decay (residual ≈ 0.6^t) can be approximated as an
+exponential:
 
 ```
-Market mispricing at time t after goal = Initial mispricing × e^(−0.4 × t)
+Market mispricing at time t after goal ≈ Initial mispricing × e^(−ρ × t)
 ```
 
-This means roughly 40% of the mispricing corrects within the first minute,
-but a tradeable residual persists for several minutes.
+where ρ ≈ 0.5/min fits the Betfair data (−ln(0.6) ≈ 0.51). However, Choi
+and Hui did not report an explicit ρ parameter — this is our continuous
+approximation of their discrete finding. Furthermore, their data is from
+Betfair, which has higher liquidity and more market makers than Kalshi. The
+actual Kalshi decay rate ρ_kalshi is estimated from our 307-match backtest
+(see §8.6) and may differ substantially in either direction.
 
 **Bias 2 — Red Card Overreaction**
 *(Vecer et al., Journal of Quantitative Analysis in Sports, 2009)*
@@ -70,8 +78,8 @@ but a tradeable residual persists for several minutes.
 When a player is sent off, the market overcorrects. The empirically validated
 effect of a red card on scoring rates is:
 
-- The team that lost a player scores at **67% of their previous rate**
-- The opposing team scores at **125% of their previous rate**
+- The team that lost a player scores at **roughly 67% of their previous rate**
+- The opposing team scores at **roughly 120–125% of their previous rate**
 
 Kalshi participants typically price a larger adjustment than this — treating a
 red card as more catastrophic than the data supports.
@@ -606,13 +614,15 @@ The γ term adjusts log-intensity for each state. For example:
 | State | Home λ multiplier | Away λ multiplier |
 |-------|------------------|------------------|
 | 11v11 (state 0) | ×1.00 | ×1.00 |
-| 10v11 (state 1, home red) | ×0.67 | ×1.25 |
-| 11v10 (state 2, away red) | ×1.25 | ×0.67 |
-| 10v10 (state 3) | ×0.84 | ×0.84 |
+| 10v11 (state 1, home red) | ×0.67 | ×1.20 |
+| 11v10 (state 2, away red) | ×1.20 | ×0.67 |
+| 10v10 (state 3) | ×0.80 | ×0.80 |
 
-These multipliers are empirical findings from Vecer et al. (2009) and
-Titman et al. (2015), and are refined further by the NLL optimizer on
-our historical data.
+These multipliers are approximate values from Vecer et al. (2009), who
+reported ×0.67 and ×1.2 from World Cup/Euro betting data. Titman et al.
+(2015) found broadly consistent effects in EPL data. These values serve
+as initialization — the NLL optimizer on our 11,531-match dataset refines
+them to league-specific estimates.
 
 #### The Q matrix (transition rates)
 
@@ -869,12 +879,13 @@ outcome. The bookmaker, knowing this, shades odds to protect themselves —
 which is exactly what creates the favourite-longshot bias. The model is
 internally consistent and theoretically grounded in information asymmetry.
 
-Given raw implied probabilities `q_i = 1/odds_i` and overround `O = Σq_i`:
+Given raw implied probabilities `q_i = 1/odds_i` and overround `O = Σq_i`,
+define the normalized implied probabilities `ρ_i = q_i / O` (these sum to 1).
 
 **Estimate z** by solving numerically:
 
 ```
-Σ_{i=1}^{3} √(z² + 4(1−z) · q_i/O) = 2 + z
+Σ_{i=1}^{3} √(z² + 4(1−z) · ρ_i²) = 2(1−z)/O + 3z
 ```
 
 This has a unique solution in `z ∈ (0, 1)` and is found efficiently by
@@ -883,7 +894,7 @@ bisection. For typical soccer markets z ≈ 0.02–0.08.
 **Recover true probabilities:**
 
 ```
-p_i = [ √(z² + 4(1−z) · q_i/O) − z ] / [ 2(1−z) ]
+p_i = O · [ √(z² + 4(1−z) · ρ_i²) − z ] / [ 2(1−z) ]
 ```
 
 The result: favorites (high q_i) get slightly **higher** probability than
@@ -1182,13 +1193,13 @@ P_model fair value — stale fill risk is already controlled by the price itself
 not by waiting. The real question is whether meaningful edge remains after
 the market partially reprices.
 
-From Choi & Hui (2014), market mispricing decays as exp(−ρ × t). At t = 50
-seconds (≈ 0.83 min), the fraction remaining is exp(−0.4 × 0.83) ≈ 0.72 —
-meaning 72% of the initial overreaction is still present even at the 50-second
-mark. The market overshoots, but corrects slowly enough that entering after a
-short cooldown still captures significant edge.
+From Choi & Hui (2014), market mispricing decays approximately as exp(−ρ × t)
+with ρ ≈ 0.5/min on Betfair. At t = 50 seconds (≈ 0.83 min), the fraction
+remaining is exp(−0.5 × 0.83) ≈ 0.66 — meaning roughly two-thirds of the
+initial overreaction is still present at the 50-second mark. This ρ value is
+replaced by ρ_kalshi once estimated from the 307-match backtest.
 
-However, the ρ ≈ 0.4/min value is from Betfair data. Kalshi has lower
+However, the ρ ≈ 0.5/min value is from Betfair data. Kalshi has lower
 liquidity, a smaller participant pool, and fewer market makers. The true
 Kalshi ρ could be meaningfully different in either direction.
 
@@ -1205,8 +1216,8 @@ corrects faster than Betfair (larger ρ), the cooldown shortens. If it
 corrects more slowly (smaller ρ), it lengthens.
 
 Until ρ_kalshi is empirically estimated from the backtest, the default is
-30 seconds — shorter than the original 50 seconds, reflecting that limit
-orders do not need the full stale-fill protection that market orders require.
+30 seconds (corresponding to ρ ≈ 0.5/min: half-life = ln(2)/0.5 ≈ 83s,
+but clamped down to 30s for conservatism during early testing).
 
 #### Red card events
 

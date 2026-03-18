@@ -253,3 +253,24 @@ def _detect_red_cards(poll_data: dict, model: LiveMatchModel) -> list[dict]:
         })
 
     return events
+
+
+def handle_penalty(
+    model: LiveMatchModel,
+    team: str,
+    minute: int,
+) -> None:
+    """Process a penalty event — freeze orderbook until resolved."""
+    model.event_state = "PENALTY_PENDING"
+    model.ob_freeze = True
+    logger.info("penalty_detected", match_id=model.match_id, team=team, minute=minute)
+
+
+def handle_var_review(
+    model: LiveMatchModel,
+    minute: int,
+) -> None:
+    """Process a VAR review event — freeze orderbook until resolved."""
+    model.event_state = "VAR_REVIEW"
+    model.ob_freeze = True
+    logger.info("var_review_started", match_id=model.match_id, minute=minute)

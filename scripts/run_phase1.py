@@ -26,14 +26,14 @@ async def main() -> None:
         for name, lid in LEAGUE_IDS.items():
             print(f"\n{'='*40}\nProcessing {name} (league_id={lid})\n{'='*40}")
             result = await run_phase1(str(lid), config)
-            print(f"  → {'GO' if result else 'NO-GO'}")
+            print(f"  -> {'GO' if result else 'NO-GO'}")
     elif args.league:
         lid = LEAGUE_IDS.get(args.league)
         if not lid:
             print(f"Unknown league: {args.league}. Available: {list(LEAGUE_IDS.keys())}")
             return
         result = await run_phase1(str(lid), config)
-        print(f"  → {'GO' if result else 'NO-GO'}")
+        print(f"  -> {'GO' if result else 'NO-GO'}")
     else:
         print("Specify --league NAME or --all")
         print(f"Available leagues: {list(LEAGUE_IDS.keys())}")

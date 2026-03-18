@@ -1,18 +1,10 @@
-"""InPlayStrengthUpdater — Bayesian update of a_H/a_A on goal events.
+"""InPlayStrengthUpdater — v5 EKF-based team strength updates.
 
-Formula: empirical Bayes shrinkage for Poisson rates (normal-normal approximation).
-  shrink     = mu_elapsed / (mu_elapsed + sigma_a_sq)
-  correction = log((n_actual + 0.5) / (mu_elapsed + 0.5))  [Laplace smoothing]
-  a_new      = a_prior + shrink * correction
-Inspired by state-space filtering concepts (Kalman gain analogy) but implemented
-as a closed-form approximation suitable for real-time in-play updating.
-NOT the SPDK method from Koopman & Lit (2015) — that paper updates week-to-week
-using importance sampling, not in-play.
+Delegates to EKFStrengthTracker for Kalman filter updates.
+Provides backward-compatible classify_goal() that maps SurpriseScore
+to categorical labels (SURPRISE/EXPECTED/NEUTRAL).
 
-sigma_a is reused from production_params (Phase 1). No additional
-training required.
-
-Reference: docs/architecture.md §3.3 item 8.
+v4 used Bayesian shrinkage. v5 uses Extended Kalman Filter.
 """
 
 from __future__ import annotations
@@ -20,20 +12,20 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from src.engine.ekf import EKFStrengthTracker
+
 
 @dataclass
 class GoalClassification:
     """Result of classifying a goal event."""
-
     label: str  # "SURPRISE" | "EXPECTED" | "NEUTRAL"
-    team: str  # "home" | "away"
+    team: str   # "home" | "away"
     scoring_team_prob: float  # pre-match win probability of scoring team
 
 
 @dataclass
 class StrengthSnapshot:
     """Snapshot of updated strengths after a goal, for logging."""
-
     a_H: float
     a_A: float
     a_H_init: float
@@ -46,11 +38,7 @@ class StrengthSnapshot:
 
 
 class InPlayStrengthUpdater:
-    """Bayesian updater for team log-intensities during a live match.
-
-    Maintains running goal counts and computes shrinkage-adjusted a_H/a_A
-    after each goal event. Preserves initial values for delta display.
-    """
+    """v5: EKF-based updater for team log-intensities during a live match."""
 
     def __init__(
         self,
@@ -58,73 +46,81 @@ class InPlayStrengthUpdater:
         a_A_init: float,
         sigma_a_sq: float,
         pre_match_home_prob: float,
+        ekf_tracker: EKFStrengthTracker | None = None,
     ) -> None:
-        """Initialize the updater.
+        self.a_H_init = a_H_init
+        self.a_A_init = a_A_init
+        self.sigma_a_sq = sigma_a_sq
+        self.pre_match_home_prob = pre_match_home_prob
 
-        Args:
-            a_H_init: Initial home log-intensity from Phase 2 backsolve.
-            a_A_init: Initial away log-intensity from Phase 2 backsolve.
-            sigma_a_sq: Variance of the ML prior (sigma_a^2 from Phase 1).
-            pre_match_home_prob: Pre-match home win probability (vig-removed).
-        """
-        # Immutable originals
-        self.a_H_init: float = a_H_init
-        self.a_A_init: float = a_A_init
-        self.sigma_a_sq: float = sigma_a_sq
-        self.pre_match_home_prob: float = pre_match_home_prob
+        # v5: delegate to EKF
+        self.ekf = ekf_tracker or EKFStrengthTracker(
+            a_H_init=a_H_init,
+            a_A_init=a_A_init,
+            P_0=sigma_a_sq,
+            sigma_omega_sq=0.01,
+        )
 
-        # Mutable current values
-        self.a_H: float = a_H_init
-        self.a_A: float = a_A_init
-
-        # Running goal counts
-        self.n_H: int = 0
-        self.n_A: int = 0
+        # Current values (mirror EKF state)
+        self.a_H = a_H_init
+        self.a_A = a_A_init
+        self.n_H = 0
+        self.n_A = 0
 
     def update_on_goal(
         self,
         team: str,
-        mu_H_elapsed: float,
-        mu_A_elapsed: float,
+        mu_H_elapsed: float = 0.0,
+        mu_A_elapsed: float = 0.0,
+        *,
+        lambda_H: float = 0.0,
+        lambda_A: float = 0.0,
+        dt: float = 1.0,
     ) -> tuple[float, float]:
         """Update a_H and a_A after a goal event.
 
-        Args:
-            team: Which team scored — "home" or "away".
-            mu_H_elapsed: Expected home goals elapsed so far
-                (mu_H_at_kickoff - mu_H_current).
-            mu_A_elapsed: Expected away goals elapsed so far
-                (mu_A_at_kickoff - mu_A_current).
-
-        Returns:
-            (new_a_H, new_a_A) — updated log-intensities.
+        v5 path: uses lambda_H/lambda_A kwargs for EKF update.
+        v4 compat: if lambda_H/lambda_A not provided, uses Bayesian fallback.
         """
         if team == "home":
             self.n_H += 1
         else:
             self.n_A += 1
 
-        self.a_H = self._bayesian_update(self.a_H_init, self.n_H, mu_H_elapsed)
-        self.a_A = self._bayesian_update(self.a_A_init, self.n_A, mu_A_elapsed)
+        if lambda_H > 0 or lambda_A > 0:
+            # v5 EKF path
+            self.ekf.update_goal(team, lambda_H, lambda_A, dt)
+            self.a_H = self.ekf.a_H
+            self.a_A = self.ekf.a_A
+        else:
+            # v4 Bayesian fallback
+            self.a_H = self._bayesian_update(self.a_H_init, self.n_H, mu_H_elapsed)
+            self.a_A = self._bayesian_update(self.a_A_init, self.n_A, mu_A_elapsed)
+            self.ekf.a_H = self.a_H
+            self.ekf.a_A = self.a_A
 
         return self.a_H, self.a_A
 
-    def classify_goal(
-        self,
-        team: str,
-    ) -> GoalClassification:
-        """Classify a goal as SURPRISE, EXPECTED, or NEUTRAL.
+    def predict(self, dt: float) -> None:
+        """EKF prediction step."""
+        self.ekf.predict(dt)
+        self.a_H = self.ekf.a_H
+        self.a_A = self.ekf.a_A
 
-        Based on the pre-match win probability of the scoring team:
-          SURPRISE:  scoring team prob < 0.35
-          EXPECTED:  scoring team prob > 0.60
-          NEUTRAL:   otherwise
+    def update_no_goal(self, lambda_H: float, lambda_A: float, dt: float) -> None:
+        """EKF no-goal update."""
+        self.ekf.update_no_goal(lambda_H, lambda_A, dt)
+        self.a_H = self.ekf.a_H
+        self.a_A = self.ekf.a_A
 
-        Args:
-            team: Which team scored — "home" or "away".
+    def compute_surprise_score(self, team: str, P_model_home_win: float) -> float:
+        """SurpriseScore = 1 - P(scoring team wins)."""
+        return self.ekf.compute_surprise_score(team, P_model_home_win)
 
-        Returns:
-            GoalClassification with label and metadata.
+    def classify_goal(self, team: str) -> GoalClassification:
+        """Classify goal using pre_match_home_prob thresholds.
+
+        Backward compatible with v4 categorical labels.
         """
         if team == "home":
             scoring_prob = self.pre_match_home_prob
@@ -139,62 +135,29 @@ class InPlayStrengthUpdater:
             label = "NEUTRAL"
 
         return GoalClassification(
-            label=label,
-            team=team,
-            scoring_team_prob=scoring_prob,
+            label=label, team=team, scoring_team_prob=scoring_prob,
         )
 
     def snapshot(self, classification: GoalClassification) -> StrengthSnapshot:
-        """Create a snapshot of the current state for logging.
-
-        Args:
-            classification: The goal classification from classify_goal().
-
-        Returns:
-            StrengthSnapshot with all current values.
-        """
         return StrengthSnapshot(
-            a_H=self.a_H,
-            a_A=self.a_A,
-            a_H_init=self.a_H_init,
-            a_A_init=self.a_A_init,
-            n_H=self.n_H,
-            n_A=self.n_A,
-            shrink_H=self._shrink_factor(self.n_H * 1.0),  # use last mu proxy
+            a_H=self.a_H, a_A=self.a_A,
+            a_H_init=self.a_H_init, a_A_init=self.a_A_init,
+            n_H=self.n_H, n_A=self.n_A,
+            shrink_H=self._shrink_factor(self.n_H * 1.0),
             shrink_A=self._shrink_factor(self.n_A * 1.0),
             classification=classification,
         )
 
-    def _bayesian_update(
-        self,
-        a_prior: float,
-        n_actual: int,
-        mu_elapsed: float,
-    ) -> float:
-        """Apply the shrinkage formula for one team.
-
-        shrink = mu_elapsed / (mu_elapsed + sigma_a^2)
-        a_new  = a_prior + shrink * log((n_actual + 0.5) / (mu_elapsed + 0.5))
-
-        Args:
-            a_prior: Initial log-intensity (a_H_init or a_A_init).
-            n_actual: Goals scored by this team so far.
-            mu_elapsed: Expected goals elapsed for this team.
-
-        Returns:
-            Updated log-intensity.
-        """
+    def _bayesian_update(self, a_prior: float, n_actual: int, mu_elapsed: float) -> float:
+        """v4 Bayesian fallback."""
         if mu_elapsed <= 0.0:
             return a_prior
-
         shrink = mu_elapsed / (mu_elapsed + self.sigma_a_sq)
         correction = math.log((n_actual + 0.5) / (mu_elapsed + 0.5))
         correction = max(-0.3, min(0.3, correction))
-
         return a_prior + shrink * correction
 
     def _shrink_factor(self, mu_elapsed: float) -> float:
-        """Compute the shrinkage factor for a given mu_elapsed."""
         if mu_elapsed <= 0.0:
             return 0.0
         return mu_elapsed / (mu_elapsed + self.sigma_a_sq)
