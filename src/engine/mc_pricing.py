@@ -19,6 +19,11 @@ from src.common.logging import get_logger
 from src.common.types import MarketProbs
 from src.math.compute_mu import compute_remaining_mu
 from src.math.mc_core import mc_simulate_remaining
+try:
+    from src.math.mc_core import mc_simulate_remaining_v5
+    _HAS_V5_MC = True
+except ImportError:
+    _HAS_V5_MC = False
 
 if TYPE_CHECKING:
     from src.engine.model import LiveMatchModel
@@ -59,30 +64,49 @@ async def compute_mc_prices(
     S_H, S_A = model.score
 
     loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(
-        None,
-        partial(
-            mc_simulate_remaining,
-            t_now=model.t,
-            T_end=model.T_exp,
-            S_H=S_H,
-            S_A=S_A,
-            state=model.current_state_X,
-            score_diff=model.delta_S,
-            a_H=model.a_H,
-            a_A=model.a_A,
-            b=model.b,
-            gamma_H=model.gamma_H,
-            gamma_A=model.gamma_A,
-            delta_H=model.delta_H,
-            delta_A=model.delta_A,
-            Q_diag=Q_diag,
-            Q_off=Q_off,
-            basis_bounds=model.basis_bounds,
-            N=N,
-            seed=seed,
-        ),
-    )
+    if _HAS_V5_MC and model.delta_H_pos is not None:
+        results = await loop.run_in_executor(
+            None,
+            partial(
+                mc_simulate_remaining_v5,
+                t_now=model.t, T_end=model.T_exp,
+                S_H=S_H, S_A=S_A,
+                state=model.current_state_X,
+                score_diff=model.delta_S,
+                a_H=model.a_H, a_A=model.a_A,
+                b=model.b,
+                gamma_H=model.gamma_H, gamma_A=model.gamma_A,
+                delta_H_pos=model.delta_H_pos,
+                delta_H_neg=model.delta_H_neg,
+                delta_A_pos=model.delta_A_pos,
+                delta_A_neg=model.delta_A_neg,
+                Q_diag=Q_diag, Q_off=Q_off,
+                basis_bounds=model.basis_bounds,
+                N=N, seed=seed,
+                eta_H=model.eta_H, eta_A=model.eta_A,
+                eta_H2=model.eta_H2, eta_A2=model.eta_A2,
+                stoppage_1_start=45.0,
+                stoppage_2_start=90.0,
+            ),
+        )
+    else:
+        results = await loop.run_in_executor(
+            None,
+            partial(
+                mc_simulate_remaining,
+                t_now=model.t, T_end=model.T_exp,
+                S_H=S_H, S_A=S_A,
+                state=model.current_state_X,
+                score_diff=model.delta_S,
+                a_H=model.a_H, a_A=model.a_A,
+                b=model.b,
+                gamma_H=model.gamma_H, gamma_A=model.gamma_A,
+                delta_H=model.delta_H, delta_A=model.delta_A,
+                Q_diag=Q_diag, Q_off=Q_off,
+                basis_bounds=model.basis_bounds,
+                N=N, seed=seed,
+            ),
+        )
 
     P_model = _results_to_market_probs(results, S_H, S_A)
     sigma_MC = _compute_sigma(P_model, N)

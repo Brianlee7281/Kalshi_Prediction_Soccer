@@ -16,6 +16,8 @@ from scipy.linalg import expm
 from src.common.logging import get_logger
 from src.common.types import OddsConsensusResult, Phase2Result
 from src.engine.strength_updater import InPlayStrengthUpdater
+from src.engine.ekf import EKFStrengthTracker
+from src.engine.hmm_estimator import HMMEstimator
 
 logger = get_logger("engine.model")
 
@@ -115,6 +117,31 @@ class LiveMatchModel:
     last_goal_type: str = "NEUTRAL"
     strength_updater: InPlayStrengthUpdater | None = None
 
+    # v5 EKF tracker
+    ekf_tracker: EKFStrengthTracker | None = None
+    sigma_omega_sq: float = 0.01
+
+    # v5 Layer 2
+    hmm_estimator: HMMEstimator | None = None
+
+    # v5 asymmetric delta (None = use symmetric delta_H/delta_A)
+    delta_H_pos: np.ndarray | None = None
+    delta_H_neg: np.ndarray | None = None
+    delta_A_pos: np.ndarray | None = None
+    delta_A_neg: np.ndarray | None = None
+
+    # v5 stoppage time η
+    eta_H: float = 0.0
+    eta_A: float = 0.0
+    eta_H2: float = 0.0
+    eta_A2: float = 0.0
+
+    # v5 Kalshi live prices
+    p_kalshi: dict[str, float] = field(default_factory=dict)
+
+    # v5 SurpriseScore
+    surprise_score: float = 0.0
+
     @classmethod
     def from_phase2_result(
         cls, result: Phase2Result, params: dict
@@ -158,6 +185,31 @@ class LiveMatchModel:
             pre_match_home_prob=pre_match_home_prob,
         )
 
+        # v5: Load asymmetric delta if available
+        delta_H_pos = np.array(params["delta_H_pos"], dtype=np.float64) if params.get("delta_H_pos") else None
+        delta_H_neg = np.array(params["delta_H_neg"], dtype=np.float64) if params.get("delta_H_neg") else None
+        delta_A_pos = np.array(params["delta_A_pos"], dtype=np.float64) if params.get("delta_A_pos") else None
+        delta_A_neg = np.array(params["delta_A_neg"], dtype=np.float64) if params.get("delta_A_neg") else None
+
+        # v5: Load eta and sigma_omega
+        eta_H = float(params.get("eta_H", 0.0))
+        eta_A = float(params.get("eta_A", 0.0))
+        eta_H2 = float(params.get("eta_H2", 0.0))
+        eta_A2 = float(params.get("eta_A2", 0.0))
+        sigma_omega_sq = float(params.get("sigma_omega_sq", 0.01))
+
+        # v5: Create EKF tracker
+        ekf_P0 = getattr(result, "ekf_P0", sigma_a ** 2)
+        ekf_tracker = EKFStrengthTracker(
+            a_H_init=result.a_H,
+            a_A_init=result.a_A,
+            P_0=ekf_P0,
+            sigma_omega_sq=sigma_omega_sq,
+        )
+
+        # v5: Create HMM estimator (stub, degrades to DomIndex)
+        hmm_estimator = HMMEstimator(hmm_params=None)
+
         model = cls(
             match_id=result.match_id,
             league_id=result.league_id,
@@ -182,6 +234,17 @@ class LiveMatchModel:
             mu_H_at_kickoff=result.mu_H,
             mu_A_at_kickoff=result.mu_A,
             strength_updater=updater,
+            ekf_tracker=ekf_tracker,
+            sigma_omega_sq=sigma_omega_sq,
+            hmm_estimator=hmm_estimator,
+            delta_H_pos=delta_H_pos,
+            delta_H_neg=delta_H_neg,
+            delta_A_pos=delta_A_pos,
+            delta_A_neg=delta_A_neg,
+            eta_H=eta_H,
+            eta_A=eta_A,
+            eta_H2=eta_H2,
+            eta_A2=eta_A2,
         )
 
         logger.info(

@@ -102,6 +102,11 @@ class OddsApiClient:
     ) -> None:
         """Connect to wss://api.odds-api.io/v3/ws
 
+        NOTE (v5 migration): In v5 architecture, this live feed is used for
+        RECORDING ONLY, not for live trading decisions. P_model from the MMPP
+        mathematical model is the sole trading authority. OddsConsensus is
+        removed in Sprint 3 migration (Task 3.14).
+
         Receives: welcome message, then live odds updates.
         Update format: {type: "updated", bookie: "Bet365", markets: [{name: "ML", odds: [...]}]}
 

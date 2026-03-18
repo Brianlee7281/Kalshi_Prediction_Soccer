@@ -59,10 +59,10 @@ class _Phase1Result:
     go: bool
     Q: np.ndarray | None = None
     b: np.ndarray | None = None
-    gamma_H: float = 0.0
-    gamma_A: float = 0.0
-    delta_H: float = 0.0
-    delta_A: float = 0.0
+    gamma_H: np.ndarray | None = None   # shape (4,) — full array
+    gamma_A: np.ndarray | None = None   # shape (4,) — full array
+    delta_H: np.ndarray | None = None   # shape (5,) — full array
+    delta_A: np.ndarray | None = None   # shape (5,) — full array
     sigma_a: float = 0.5
     xgb_blob: bytes | None = None
     feature_names: list[str] | None = None
@@ -70,6 +70,18 @@ class _Phase1Result:
     brier_score: float = 1.0
     xgb_used: bool = False
     matched_odds: int = 0
+    # v5 asymmetric delta arrays
+    delta_H_pos: np.ndarray | None = None  # shape (5,)
+    delta_H_neg: np.ndarray | None = None  # shape (5,)
+    delta_A_pos: np.ndarray | None = None  # shape (5,)
+    delta_A_neg: np.ndarray | None = None  # shape (5,)
+    # v5 stoppage eta
+    eta_H: float = 0.0
+    eta_A: float = 0.0
+    eta_H2: float = 0.0
+    eta_A2: float = 0.0
+    # v5 EKF process noise
+    sigma_omega_sq: float = 0.01
 
 
 def _run_calibration(league_id: str) -> _Phase1Result:
@@ -189,19 +201,45 @@ def _run_calibration(league_id: str) -> _Phase1Result:
         except Exception as e:
             log.warning("xgb_serialize_failed", error=str(e))
 
-    gamma_H_val = float(best_opt_result.gamma_H[1]) if len(best_opt_result.gamma_H) > 1 else 0.0
-    gamma_A_val = float(best_opt_result.gamma_A[2]) if len(best_opt_result.gamma_A) > 2 else 0.0
-    delta_H_val = float(best_opt_result.delta_H[2]) if len(best_opt_result.delta_H) > 2 else 0.0
-    delta_A_val = float(best_opt_result.delta_A[2]) if len(best_opt_result.delta_A) > 2 else 0.0
+    # Step 8: Asymmetric delta estimation (v5)
+    from src.calibration.step_1_6_asymmetric_delta import estimate_asymmetric_delta
+    delta_H_pos, delta_H_neg, delta_A_pos, delta_A_neg = estimate_asymmetric_delta(
+        intervals_by_match, best_opt_result,
+    )
+    log.info("asymmetric_delta_estimated",
+             delta_H_pos=delta_H_pos.tolist(), delta_H_neg=delta_H_neg.tolist())
+
+    # Step 9: Stoppage time η estimation (v5)
+    from src.calibration.step_1_7_stoppage_eta import estimate_stoppage_eta
+    eta_H, eta_A, eta_H2, eta_A2 = estimate_stoppage_eta(
+        intervals_by_match, best_opt_result,
+    )
+    log.info("stoppage_eta_estimated", eta_H=eta_H, eta_A=eta_A, eta_H2=eta_H2, eta_A2=eta_A2)
+
+    # Step 10: EKF process noise estimation (v5)
+    from src.calibration.step_1_8_sigma_omega import estimate_sigma_omega_sq
+    sigma_omega_sq = estimate_sigma_omega_sq(intervals_by_match, best_opt_result)
+    log.info("sigma_omega_estimated", sigma_omega_sq=sigma_omega_sq)
 
     return _Phase1Result(
         go=True, Q=Q, b=best_opt_result.b,
-        gamma_H=gamma_H_val, gamma_A=gamma_A_val,
-        delta_H=delta_H_val, delta_A=delta_A_val,
+        gamma_H=best_opt_result.gamma_H,   # full (4,) array
+        gamma_A=best_opt_result.gamma_A,   # full (4,) array
+        delta_H=best_opt_result.delta_H,   # full (5,) array
+        delta_A=best_opt_result.delta_A,   # full (5,) array
         sigma_a=best_sigma_a, xgb_blob=xgb_blob,
         feature_names=feature_names if xgb_result else None,
         match_count=len(match_ids), brier_score=best_brier,
         xgb_used=xgb_used, matched_odds=matched_odds,
+        delta_H_pos=delta_H_pos,
+        delta_H_neg=delta_H_neg,
+        delta_A_pos=delta_A_pos,
+        delta_A_neg=delta_A_neg,
+        eta_H=eta_H,
+        eta_A=eta_A,
+        eta_H2=eta_H2,
+        eta_A2=eta_A2,
+        sigma_omega_sq=sigma_omega_sq,
     )
 
 
@@ -210,15 +248,24 @@ async def save_production_params(
     league_id: int,
     Q: np.ndarray,
     b: np.ndarray,
-    gamma_H: float,
-    gamma_A: float,
-    delta_H: float,
-    delta_A: float,
+    gamma_H: np.ndarray,
+    gamma_A: np.ndarray,
+    delta_H: np.ndarray,
+    delta_A: np.ndarray,
     sigma_a: float,
     xgb_model_blob: bytes | None,
     feature_mask: list[str] | None,
     match_count: int,
     brier_score: float,
+    delta_H_pos: np.ndarray | None = None,
+    delta_H_neg: np.ndarray | None = None,
+    delta_A_pos: np.ndarray | None = None,
+    delta_A_neg: np.ndarray | None = None,
+    eta_H: float = 0.0,
+    eta_A: float = 0.0,
+    eta_H2: float = 0.0,
+    eta_A2: float = 0.0,
+    sigma_omega_sq: float = 0.01,
 ) -> int:
     """INSERT into production_params table. Returns version number."""
     dsn = f"postgresql://{config.db_user}:{config.db_password}@{config.db_host}:{config.db_port}/{config.db_name}"
@@ -234,18 +281,32 @@ async def save_production_params(
                 INSERT INTO production_params
                     (league_id, Q, b, gamma_H, gamma_A, delta_H, delta_A,
                      sigma_a, xgb_model_blob, feature_mask, trained_at,
-                     match_count, brier_score, is_active)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE)
+                     match_count, brier_score, is_active,
+                     delta_H_pos, delta_H_neg, delta_A_pos, delta_A_neg,
+                     eta_H, eta_A, eta_H2, eta_A2, sigma_omega_sq)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                        $12, $13, TRUE,
+                        $14, $15, $16, $17,
+                        $18, $19, $20, $21, $22)
                 RETURNING version
                 """,
                 league_id,
                 json.dumps(Q.tolist()),
                 json.dumps(b.tolist()),
-                gamma_H, gamma_A, delta_H, delta_A, sigma_a,
+                json.dumps(gamma_H.tolist()),
+                json.dumps(gamma_A.tolist()),
+                json.dumps(delta_H.tolist()),
+                json.dumps(delta_A.tolist()),
+                sigma_a,
                 xgb_model_blob,
                 json.dumps(feature_mask) if feature_mask else None,
                 datetime.now(timezone.utc),
                 match_count, brier_score,
+                json.dumps(delta_H_pos.tolist()) if delta_H_pos is not None else None,
+                json.dumps(delta_H_neg.tolist()) if delta_H_neg is not None else None,
+                json.dumps(delta_A_pos.tolist()) if delta_A_pos is not None else None,
+                json.dumps(delta_A_neg.tolist()) if delta_A_neg is not None else None,
+                eta_H, eta_A, eta_H2, eta_A2, sigma_omega_sq,
             )
         log.info("params_saved", version=version, league_id=league_id)
         return version
@@ -280,6 +341,15 @@ async def run_phase1(league_id: str, config: Config) -> bool:
         feature_mask=result.feature_names,
         match_count=result.match_count,
         brier_score=result.brier_score,
+        delta_H_pos=result.delta_H_pos,
+        delta_H_neg=result.delta_H_neg,
+        delta_A_pos=result.delta_A_pos,
+        delta_A_neg=result.delta_A_neg,
+        eta_H=result.eta_H,
+        eta_A=result.eta_A,
+        eta_H2=result.eta_H2,
+        eta_A2=result.eta_A2,
+        sigma_omega_sq=result.sigma_omega_sq,
     )
 
     log.info(

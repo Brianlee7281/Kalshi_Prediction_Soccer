@@ -37,7 +37,7 @@ FKT_v4/
 ├── docs/
 │   └── architecture.md          ← single source of truth (1,274 lines)
 ├── src/
-│   ├── math/                    ← 4 core files (copied from v3, DO NOT modify)
+│   ├── math/                    ← 4 core files (copied from v3, extend for v5 — preserve old signatures as wrappers)
 │   │   ├── mc_core.py           ← Numba JIT MC
 │   │   ├── step_1_4_nll_optimize.py  ← Adam→L-BFGS NLL
 │   │   ├── step_1_2_Q_estimation.py  ← Q matrix

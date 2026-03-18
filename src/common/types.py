@@ -62,6 +62,25 @@ class ProductionParams(BaseModel):
     delta_H: float
     delta_A: float
 
+    # v5 asymmetric score-state effects (defaults = None → use symmetric delta_H/delta_A)
+    delta_H_pos: list[float] | None = None   # shape [5], home when leading
+    delta_H_neg: list[float] | None = None   # shape [5], home when trailing
+    delta_A_pos: list[float] | None = None   # shape [5], away when trailing
+    delta_A_neg: list[float] | None = None   # shape [5], away when leading
+    # v5 stoppage time multipliers (default 0.0 = no stoppage adjustment)
+    eta_H: float = 0.0     # 1st half stoppage, home
+    eta_A: float = 0.0     # 1st half stoppage, away
+    eta_H2: float = 0.0    # 2nd half stoppage, home
+    eta_A2: float = 0.0    # 2nd half stoppage, away
+    # v5 EKF process noise (default 0.01 = small drift)
+    sigma_omega_sq: float = 0.01
+    # v5 full gamma arrays (defaults = None → use scalar gamma_H/gamma_A)
+    gamma_H_full: list[float] | None = None  # shape [4]
+    gamma_A_full: list[float] | None = None  # shape [4]
+    # v5 full delta arrays (defaults = None → use scalar delta_H/delta_A)
+    delta_H_full: list[float] | None = None  # shape [5]
+    delta_A_full: list[float] | None = None  # shape [5]
+
     # Step 1.4: optimization hyperparameter
     sigma_a: float
 
@@ -106,6 +125,9 @@ class Phase2Result(BaseModel):
     # pre-match odds (sanity check + Phase 4 reference)
     market_implied: MarketProbs | None  # Bet365/Betfair opening, vig-removed
     prediction_method: str  # "xgboost" | "form_mle" | "league_mle"
+
+    # v5: initial EKF uncertainty — larger P0 = more aggressive early EKF updates
+    ekf_P0: float = 0.25  # default = sigma_a² = 0.5² = 0.25
 
 
 # §2.4 BookmakerState
@@ -154,6 +176,15 @@ class TickPayload(BaseModel):
     a_H_current: float  # current (possibly updated) home log-intensity
     a_A_current: float  # current (possibly updated) away log-intensity
     last_goal_type: str = "NEUTRAL"  # SURPRISE | EXPECTED | NEUTRAL
+
+    # v5 EKF state
+    ekf_P_H: float = 0.0        # EKF uncertainty for home
+    ekf_P_A: float = 0.0        # EKF uncertainty for away
+    # v5 Layer 2 state
+    hmm_state: int = 0           # HMM state: -1, 0, +1
+    dom_index: float = 0.0       # DomIndex fallback value
+    # v5 SurpriseScore
+    surprise_score: float = 0.0  # continuous [0, 1], replaces categorical last_goal_type
 
     # trading permission (Phase 3 decides, Phase 4 respects)
     order_allowed: bool

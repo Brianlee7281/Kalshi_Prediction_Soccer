@@ -146,3 +146,114 @@ def compute_remaining_mu(
         mu_A += contrib_A * delta_tau
 
     return max(0.0, mu_H), max(0.0, mu_A)
+
+
+def compute_remaining_mu_v5(
+    model: LiveFootballQuantModel,
+    override_delta_S: int | None = None,
+) -> tuple[float, float]:
+    """Compute remaining expected goals with v5 asymmetric delta and eta stoppage.
+
+    If the model has ``delta_H_pos`` attribute (v5 params loaded), uses
+    asymmetric delta lookup based on sign of delta_S and applies eta
+    multipliers during stoppage subintervals. Otherwise falls back to
+    the original symmetric logic via :func:`compute_remaining_mu`.
+
+    Args:
+        model: Current match state (may or may not carry v5 attributes).
+        override_delta_S: Optional override for ΔS.
+
+    Returns:
+        (mu_H, mu_A) — remaining expected goals, non-negative floats.
+    """
+    # Fall back to v4 if model lacks v5 params
+    if not hasattr(model, "delta_H_pos") or model.delta_H_pos is None:
+        return compute_remaining_mu(model, override_delta_S)
+
+    t = model.t
+    T = model.T_exp
+    X = model.current_state_X
+    ds = override_delta_S if override_delta_S is not None else model.delta_S
+
+    # delta index: ΔS → {0: ≤-2, 1: -1, 2: 0, 3: +1, 4: ≥+2}
+    di = max(0, min(4, ds + 2))
+
+    if t >= T:
+        return 0.0, 0.0
+
+    # Asymmetric delta lookup
+    if ds > 0:  # home leading
+        dH_val = float(model.delta_H_pos[di])
+        dA_val = float(model.delta_A_pos[di])
+    else:  # trailing or tied
+        dH_val = float(model.delta_H_neg[di])
+        dA_val = float(model.delta_A_neg[di])
+
+    # Stoppage parameters
+    eta_H = getattr(model, "eta_H", 0.0)
+    eta_A = getattr(model, "eta_A", 0.0)
+    eta_H2 = getattr(model, "eta_H2", 0.0)
+    eta_A2 = getattr(model, "eta_A2", 0.0)
+    stoppage_1_start = getattr(model, "stoppage_1_start", 45.0)
+    stoppage_2_start = getattr(model, "stoppage_2_start", 90.0)
+
+    # Build list of subinterval boundaries clipped to [t, T]
+    boundaries = [float(b) for b in model.basis_bounds if t < float(b) < T]
+    breakpoints = [t] + boundaries + [T]
+
+    mu_H = 0.0
+    mu_A = 0.0
+
+    for idx in range(len(breakpoints) - 1):
+        tau_start = breakpoints[idx]
+        tau_end = breakpoints[idx + 1]
+        delta_tau = tau_end - tau_start
+
+        if delta_tau <= 0.0:
+            continue
+
+        # Basis index: which interval does tau_start fall in?
+        n_periods = len(model.basis_bounds) - 1
+        bi = 0
+        for k in range(n_periods):
+            b_lo = float(model.basis_bounds[k])
+            b_hi = float(model.basis_bounds[k + 1])
+            if b_lo <= tau_start < b_hi:
+                bi = k
+                break
+
+        # Eta stoppage multiplier at subinterval midpoint
+        tau_mid = (tau_start + tau_end) / 2.0
+        eta_h = 0.0
+        eta_a = 0.0
+        if stoppage_1_start < tau_mid < stoppage_1_start + 10.0:
+            eta_h = eta_H
+            eta_a = eta_A
+        elif stoppage_2_start < tau_mid < stoppage_2_start + 10.0:
+            eta_h = eta_H2
+            eta_a = eta_A2
+
+        # Midpoint quadrature: evaluate P at midpoint of subinterval
+        dt_mid = tau_mid - t
+        P_mid = get_transition_prob(model, dt_mid)
+        p_row = P_mid[X, :]  # shape (4,): P(X -> j) at midpoint
+
+        # Intensity weighted by state-occupancy probabilities
+        b_val = float(model.b[bi])
+
+        contrib_H = 0.0
+        contrib_A = 0.0
+        for j in range(4):
+            p_j = float(p_row[j])
+            if p_j > 0.0:
+                contrib_H += p_j * np.exp(
+                    model.a_H + b_val + float(model.gamma_H[j]) + dH_val + eta_h
+                )
+                contrib_A += p_j * np.exp(
+                    model.a_A + b_val + float(model.gamma_A[j]) + dA_val + eta_a
+                )
+
+        mu_H += contrib_H * delta_tau
+        mu_A += contrib_A * delta_tau
+
+    return max(0.0, mu_H), max(0.0, mu_A)
