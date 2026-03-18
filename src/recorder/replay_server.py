@@ -58,9 +58,12 @@ class ReplayServer:
         self._runner: web.AppRunner | None = None
         self._ws_app: web.Application | None = None
         self._ws_runner: web.AppRunner | None = None
+        self._kalshi_ws_app: web.Application | None = None
+        self._kalshi_ws_runner: web.AppRunner | None = None
 
         self.goalserve_port: int = 0
         self.odds_ws_port: int = 0
+        self.kalshi_ws_port: int = 0
 
         logger.info(
             "replay_server_loaded",
@@ -72,7 +75,8 @@ class ReplayServer:
         )
 
     async def start(
-        self, goalserve_port: int = 8555, odds_ws_port: int = 8556
+        self, goalserve_port: int = 8555, odds_ws_port: int = 8556,
+        kalshi_ws_port: int = 8557,
     ) -> None:
         """Start mock HTTP + WS servers."""
         # Goalserve HTTP mock
@@ -93,10 +97,20 @@ class ReplayServer:
         await ws_site.start()
         self.odds_ws_port = odds_ws_port
 
+        # Kalshi WS mock
+        self._kalshi_ws_app = web.Application()
+        self._kalshi_ws_app.router.add_get("/ws", self._serve_kalshi_ws)
+        self._kalshi_ws_runner = web.AppRunner(self._kalshi_ws_app)
+        await self._kalshi_ws_runner.setup()
+        kalshi_site = web.TCPSite(self._kalshi_ws_runner, "127.0.0.1", kalshi_ws_port)
+        await kalshi_site.start()
+        self.kalshi_ws_port = kalshi_ws_port
+
         logger.info(
             "replay_server_started",
             goalserve_port=goalserve_port,
             odds_ws_port=odds_ws_port,
+            kalshi_ws_port=kalshi_ws_port,
         )
 
     async def stop(self) -> None:
@@ -107,6 +121,9 @@ class ReplayServer:
         if self._ws_runner is not None:
             await self._ws_runner.cleanup()
             self._ws_runner = None
+        if self._kalshi_ws_runner is not None:
+            await self._kalshi_ws_runner.cleanup()
+            self._kalshi_ws_runner = None
         logger.info("replay_server_stopped")
 
     async def _serve_goalserve(self, request: web.Request) -> web.Response:
@@ -147,6 +164,27 @@ class ReplayServer:
             except (ConnectionResetError, ConnectionError):
                 break
 
+        await ws.close()
+        return ws
+
+    async def _serve_kalshi_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """Send Kalshi orderbook updates via WS with timing based on _ts and speed."""
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "auth_response", "status": "ok"})
+        prev_ts = 0.0
+        for record in self.kalshi_ob_records:
+            ts = record.get("_ts", 0.0)
+            if prev_ts > 0:
+                delay = (ts - prev_ts) / self.speed
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            prev_ts = ts
+            clean = {k: v for k, v in record.items() if k != "_ts"}
+            try:
+                await ws.send_json(clean)
+            except ConnectionError:
+                break
         await ws.close()
         return ws
 

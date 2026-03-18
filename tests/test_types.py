@@ -1,5 +1,5 @@
 import pytest
-from src.common.types import MarketProbs, TickPayload, Signal, OddsConsensusResult
+from src.common.types import MarketProbs, TickPayload, Signal
 
 
 def test_market_probs_defaults():
@@ -8,39 +8,29 @@ def test_market_probs_defaults():
     assert mp.home_win + mp.draw + mp.away_win == pytest.approx(1.0)
 
 
-def test_tick_payload_reference_source():
-    # P_reference should exist and reference_source should be one of two values
+def test_tick_payload_v5_fields():
     tp = TickPayload(
         match_id="test", t=30.0, engine_phase="FIRST_HALF",
-        odds_consensus=None,
         P_model=MarketProbs(home_win=0.5, draw=0.3, away_win=0.2),
         sigma_MC=MarketProbs(home_win=0.01, draw=0.01, away_win=0.01),
-        P_reference=MarketProbs(home_win=0.5, draw=0.3, away_win=0.2),
-        reference_source="model",
         score=(0, 0), X=0, delta_S=0, mu_H=1.2, mu_A=0.9,
         a_H_current=0.3, a_A_current=0.1,
         order_allowed=True, cooldown=False, ob_freeze=False, event_state="IDLE",
     )
-    assert tp.reference_source in ("consensus", "model")
+    assert tp.ekf_P_H == 0.0  # default
+    assert tp.hmm_state == 0
+    assert tp.surprise_score == 0.0
 
 
 def test_signal_fields():
     s = Signal(
         match_id="test", ticker="KXEPLGAME-26MAR15-HOM", market_type="home_win",
-        direction="BUY_YES", P_reference=0.55, reference_source="consensus",
-        P_kalshi=0.48, P_model=0.54, EV=0.07, consensus_confidence="HIGH",
+        direction="BUY_YES",
+        P_kalshi=0.48, P_model=0.54, EV=0.07,
         kelly_fraction=0.05, kelly_amount=25.0, contracts=52,
     )
     assert s.direction in ("BUY_YES", "BUY_NO", "HOLD")
     assert s.EV > 0
-
-
-def test_odds_consensus_result():
-    oc = OddsConsensusResult(
-        P_consensus=MarketProbs(home_win=0.5, draw=0.3, away_win=0.2),
-        confidence="HIGH", n_fresh_sources=3, bookmakers=[], event_detected=False,
-    )
-    assert oc.confidence in ("HIGH", "LOW", "NONE")
 
 
 def test_interval_record():

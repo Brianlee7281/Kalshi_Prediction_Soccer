@@ -80,11 +80,6 @@ async def tick_loop(
             match_id=model.match_id,
             t=model.t,
             engine_phase=model.engine_phase,
-            # v4 compat fields (kept until Task 3.15)
-            odds_consensus=None,
-            P_reference=P_model,
-            reference_source="model",
-            # v5 fields
             P_model=P_model,
             sigma_MC=sigma_MC,
             score=model.score,

@@ -14,7 +14,7 @@ import numpy as np
 from scipy.linalg import expm
 
 from src.common.logging import get_logger
-from src.common.types import OddsConsensusResult, Phase2Result
+from src.common.types import Phase2Result
 from src.engine.strength_updater import InPlayStrengthUpdater
 from src.engine.ekf import EKFStrengthTracker
 from src.engine.hmm_estimator import HMMEstimator
@@ -99,9 +99,6 @@ class LiveMatchModel:
 
     # Tick management
     tick_count: int = 0
-
-    # Odds consensus state (updated by odds_api_listener)
-    odds_consensus: OddsConsensusResult | None = None
 
     # Precomputed grids (for compute_mu)
     P_grid: dict[int, np.ndarray] = field(default_factory=dict)

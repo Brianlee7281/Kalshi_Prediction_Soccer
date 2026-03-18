@@ -1,13 +1,13 @@
-# CLAUDE.md — MMPP Soccer Live Trading System (v4)
+# CLAUDE.md — MMPP Soccer Live Trading System (v5)
 
-Cross-market soccer trading: Betfair/bookmaker consensus → edge vs Kalshi → automated execution.
+Cross-market soccer trading: 3-layer MMPP model → edge vs Kalshi → automated execution.
 
 ## Architecture (4 phases per match)
 
 1. **Phase 1** (offline weekly): Train MMPP params → `production_params` table
 2. **Phase 2** (kickoff −65min): Backsolve intensities → GO/SKIP
-3. **Phase 3** (live 90min): OddsConsensus + MMPP model + InPlayStrengthUpdater → P_reference/sec
-4. **Phase 4** (live 90min): Edge = P_reference − P_kalshi → Kelly → Kalshi orders
+3. **Phase 3** (live 90min): EKF + HMM/DomIndex + MC simulation → P_model/sec
+4. **Phase 4** (live 90min): Edge = P_model − P_kalshi → Kelly → Kalshi orders
 
 Infra: Docker (1 container/match), PostgreSQL, Redis, FastAPI + React dashboard.
 
@@ -18,7 +18,7 @@ Infra: Docker (1 container/match), PostgreSQL, Redis, FastAPI + React dashboard.
 | `src/math/` | `docs/architecture.md` §3.1 (Phase 1) |
 | `src/calibration/` | `docs/architecture.md` §3.1 + §8 (data assets) |
 | `src/clients/` | `docs/architecture.md` §4 (external services — verified endpoints) |
-| `src/engine/` | `docs/architecture.md` §3.3 (Phase 3 — signal hierarchy, OddsConsensus) |
+| `src/engine/` | `docs/architecture.md` §3.3 (Phase 3 — EKF, HMM/DomIndex, MC pipeline) |
 | `src/execution/` | `docs/architecture.md` §3.4 + §3.7 (Phase 4 + trading logic) |
 | `src/orchestrator/` | `docs/architecture.md` §3.5 (orchestrator) |
 | `src/dashboard/` | `docs/architecture.md` §3.6 (dashboard) |
@@ -44,7 +44,7 @@ FKT_v4/
 │   │   └── compute_mu.py       ← remaining μ
 │   ├── calibration/             ← Phase 1 pipeline
 │   ├── clients/                 ← Goalserve, Kalshi, OddsAPI clients
-│   ├── engine/                  ← Phase 3: tick loop, OddsConsensus, events
+│   ├── engine/                  ← Phase 3: tick loop, EKF, HMM/DomIndex, events
 │   ├── execution/               ← Phase 4: signals, Kelly, exits, settlement
 │   ├── orchestrator/            ← scheduler, container lifecycle
 │   ├── recorder/                ← live data recording + ReplayServer
@@ -71,5 +71,8 @@ docker compose up                 # full stack
 ## Current Progress
 
 - [x] Sprint -1: Feasibility study
-- [ ] Sprint 0: Project skeleton
+- [x] Sprint 0: Project skeleton
+- [x] Sprint S1: v5 math core migration (mc_core_v5, asymmetric delta, stoppage eta, sigma_omega)
+- [x] Sprint S2: v5 clients + Phase 2 migration (Kalshi WS, Shin vig, ekf_P0)
+- [x] Sprint S3: v5 Phase 3 engine migration (EKF, DomIndex, HMM stub, tick_loop v5 pipeline)
 - [ ] Sprint 1-7: Implementation

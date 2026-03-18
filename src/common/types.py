@@ -130,22 +130,6 @@ class Phase2Result(BaseModel):
     ekf_P0: float = 0.25  # default = sigma_a² = 0.5² = 0.25
 
 
-# §2.4 BookmakerState
-class BookmakerState(BaseModel):
-    name: str  # "Betfair Exchange", "Bet365", "1xbet", etc.
-    implied: MarketProbs
-    last_update: datetime
-    is_stale: bool  # True if last_update > 10s ago
-
-
-# §2.4 OddsConsensusResult
-class OddsConsensusResult(BaseModel):
-    P_consensus: MarketProbs  # weighted reference price (Betfair-heavy)
-    confidence: str  # "HIGH" (2+ agree) | "LOW" (1 only) | "NONE" (no fresh data)
-    n_fresh_sources: int  # how many bookmakers have fresh data
-    bookmakers: list[BookmakerState]  # individual bookmaker states
-    event_detected: bool  # True if 2+ sources moved >3% in same direction within 5s
-
 
 # §2.4 TickPayload (Phase 3 → Phase 4)
 class TickPayload(BaseModel):
@@ -153,17 +137,9 @@ class TickPayload(BaseModel):
     t: float  # effective play time (minutes), halftime excluded
     engine_phase: str  # FIRST_HALF | HALFTIME | SECOND_HALF | FINISHED
 
-    # TIER 1: Odds consensus (primary reference for trading)
-    odds_consensus: OddsConsensusResult | None
-
-    # TIER 2: MMPP model pricing (fallback when consensus unavailable)
+    # MMPP model pricing
     P_model: MarketProbs  # MMPP MC output
     sigma_MC: MarketProbs  # per-market MC standard error
-
-    # Effective reference price (Phase 4 uses this for edge detection)
-    # = odds_consensus.P_consensus if confidence HIGH, else P_model
-    P_reference: MarketProbs
-    reference_source: str  # "consensus" | "model"
 
     # match state
     score: tuple[int, int]  # (home, away)
@@ -200,17 +176,15 @@ class Signal(BaseModel):
     market_type: str  # "home_win", "draw", "away_win", etc.
     direction: str  # "BUY_YES" | "BUY_NO" | "HOLD"
 
-    P_reference: float  # reference probability for this market (consensus or model)
-    reference_source: str  # "consensus" | "model"
     P_kalshi: float  # VWAP effective price from Kalshi orderbook
-    P_model: float  # MMPP model probability (always computed, for logging)
+    P_model: float  # MMPP model probability
 
     EV: float  # expected value (cents)
-    consensus_confidence: str  # HIGH | LOW | NONE
 
     kelly_fraction: float  # raw Kelly fraction
     kelly_amount: float  # dollar amount after risk limits
     contracts: int  # final contract count
+    surprise_score: float = 0.0
 
 
 # §2.6 FillResult (Phase 4 internal)
@@ -233,11 +207,8 @@ class TickMessage(BaseModel):
     match_id: str
     t: float
     engine_phase: str
-    P_reference: MarketProbs  # consensus or model (whatever Phase 3 chose)
-    reference_source: str  # "consensus" | "model"
-    P_model: MarketProbs  # MMPP output (always present)
+    P_model: MarketProbs  # MMPP output
     sigma_MC: MarketProbs
-    consensus_confidence: str  # HIGH | LOW | NONE
     order_allowed: bool
     cooldown: bool
     ob_freeze: bool
@@ -245,6 +216,10 @@ class TickMessage(BaseModel):
     mu_H: float
     mu_A: float
     score: tuple[int, int]
+    ekf_P_H: float = 0.0
+    ekf_P_A: float = 0.0
+    hmm_state: int = 0
+    surprise_score: float = 0.0
 
 
 # Channel: "event:{match_id}"
@@ -263,10 +238,7 @@ class SignalMessage(BaseModel):
     ticker: str
     direction: str
     EV: float
-    P_reference: float
     P_kalshi: float
-    reference_source: str
-    consensus_confidence: str
     kelly_fraction: float
     fill_qty: int
     fill_price: float

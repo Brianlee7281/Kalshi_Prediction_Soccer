@@ -1,23 +1,10 @@
 # System Patterns — Read Every Session
 
-## Pattern 1: Signal Hierarchy (Phase 3)
+## Pattern 1: P_model is Sole Authority (v5)
 
-Three tiers. Tier 1 is PRIMARY. Model is FALLBACK.
-
-```python
-if odds_consensus.confidence == "HIGH":     # 2+ bookmakers agree
-    P_reference = odds_consensus.P_consensus
-    reference_source = "consensus"
-elif odds_consensus.confidence == "LOW":     # 1 source, cross-check with model
-    if abs(consensus - P_model) < 0.10:
-        P_reference = odds_consensus.P_consensus
-    else:
-        P_reference = P_model
-        reference_source = "model"
-else:                                        # NONE — all stale
-    P_reference = P_model
-    reference_source = "model"
-```
+P_model from the 3-layer mathematical model is the ONLY probability used for trading.
+No OddsConsensus, no P_reference, no signal hierarchy. Odds-API data is recorded for
+post-match analysis only.
 
 ## Pattern 2: MarketProbs Decomposition (Phase 3→4)
 
@@ -25,9 +12,8 @@ Phase 3 emits `MarketProbs` (dict-like). Phase 4's `signal_generator` decomposes
 
 ```python
 for market_type in active_markets:
-    p_ref = getattr(payload.P_reference, market_type)    # float
     p_model = getattr(payload.P_model, market_type)      # float
-    signal = generate_signal(p_ref, p_model, ticker, ...)
+    signal = generate_signal(p_model, ticker, ...)
 ```
 
 NEVER pass MarketProbs directly to edge detection. Always extract the float first.
@@ -54,20 +40,15 @@ confirm_exposure()    # on fill — or release_exposure() on fail
 
 CRON: release stale RESERVED entries >60s old, every 5min.
 
-## Pattern 5: Confidence-Adjusted Kelly (Phase 4)
+## Pattern 5: SurpriseScore-Adjusted Kelly (Phase 4, v5)
 
 ```python
-kelly_multiplier = {
-    "consensus_HIGH_neutral":   0.25,
-    "consensus_HIGH_surprise":  0.35,   # SURPRISE or RED_CARD event
-    "consensus_LOW":            0.10,
-    "model_only_surprise":      0.15,   # SURPRISE or RED_CARD, model-only
-    "model_only_neutral":       0.10,
-}
-# last_goal_type from TickPayload determines which key to use.
-# SURPRISE: scoring team pre-match prob < 0.35
-# EXPECTED: scoring team pre-match prob > 0.60
-# NEUTRAL: otherwise
+# SurpriseScore = 1 - P(scoring team wins), continuous [0, 1]
+# Higher = more surprising goal → higher Kelly multiplier
+kelly_base = 0.10
+kelly_surprise_bonus = 0.25  # max additional fraction for surprise goals
+kelly_multiplier = kelly_base + kelly_surprise_bonus * payload.surprise_score
+# EKF uncertainty (ekf_P_H, ekf_P_A) can further scale down when uncertain
 ```
 
 ## Pattern 6: Parameter Version Pinning

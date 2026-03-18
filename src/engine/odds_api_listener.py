@@ -85,15 +85,11 @@ async def odds_api_listener(model: LiveMatchModel) -> None:
 
                         bookie, implied = parsed
 
-                        if model.odds_consensus is not None:
-                            model.odds_consensus.update_bookmaker(bookie, implied)
-                            logger.info(
-                                "bookmaker_updated",
-                                bookmaker=bookie,
-                                home_win=round(implied.home_win, 4),
-                                draw=round(implied.draw, 4),
-                                away_win=round(implied.away_win, 4),
-                            )
+                        logger.debug(
+                            "odds_recorded",
+                            bookmaker=bookie,
+                            home_win=round(implied.home_win, 4),
+                        )
 
         except websockets.ConnectionClosed as exc:
             logger.warning("odds_api_ws_closed", code=exc.code, reason=exc.reason)
