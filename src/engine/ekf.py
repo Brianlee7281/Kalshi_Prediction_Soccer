@@ -102,16 +102,26 @@ class EKFStrengthTracker:
         self.a_A = max(self._a_A_init - 1.5, min(self._a_A_init + 1.5, self.a_A))
 
     def compute_surprise_score(
-        self, team: str, P_model_home_win: float,
+        self,
+        team: str,
+        P_model_home_win: float,
+        P_model_away_win: float | None = None,
     ) -> float:
         """Compute SurpriseScore = 1 - P(scoring team wins | pre-goal state).
+
+        For away goals, pass *P_model_away_win* explicitly to avoid
+        conflating P(A) with 1 - P(H) = P(A) + P(D).  When omitted,
+        falls back to the old approximation ``1 - P_model_home_win``.
 
         Returns float in [0, 1]. Higher = more surprising.
         """
         if team == "home":
             scoring_team_win_prob = P_model_home_win
         else:
-            scoring_team_win_prob = 1.0 - P_model_home_win
+            if P_model_away_win is not None:
+                scoring_team_win_prob = P_model_away_win
+            else:
+                scoring_team_win_prob = 1.0 - P_model_home_win
         return max(0.0, min(1.0, 1.0 - scoring_team_win_prob))
 
     @property

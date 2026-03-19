@@ -10,6 +10,7 @@ import time
 from typing import TYPE_CHECKING
 
 from src.common.logging import get_logger
+from src.engine.intensity import compute_lambda
 
 if TYPE_CHECKING:
     from src.engine.model import LiveMatchModel
@@ -59,8 +60,14 @@ def handle_goal(
     )
 
     if model.strength_updater is not None:
+        # Compute current intensities so the v5 EKF goal-update path fires
+        # (without these kwargs, update_on_goal falls back to v4 Bayesian).
+        lambda_H = compute_lambda(model, "home")
+        lambda_A = compute_lambda(model, "away")
         new_a_H, new_a_A = model.strength_updater.update_on_goal(
-            team, model.mu_H_elapsed, model.mu_A_elapsed
+            team, model.mu_H_elapsed, model.mu_A_elapsed,
+            lambda_H=lambda_H, lambda_A=lambda_A,
+            dt=1.0 / 60.0,  # one-tick observation window, in minutes
         )
         model.a_H = new_a_H
         model.a_A = new_a_A

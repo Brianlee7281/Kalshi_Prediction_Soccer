@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pydantic import BaseModel
 
 
@@ -262,3 +263,86 @@ class SystemAlertMessage(BaseModel):
     title: str
     details: dict[str, str]
     timestamp: float
+
+
+# ─── Phase 4 Enums ────────────────────────────────────────────
+
+class TradingMode(str, Enum):
+    PAPER = "paper"
+    LIVE = "live"
+
+class ExitTrigger(str, Enum):
+    EDGE_DECAY = "edge_decay"
+    EDGE_REVERSAL = "edge_reversal"
+    POSITION_TRIM = "position_trim"
+    OPPORTUNITY_COST = "opportunity_cost"
+    EXPIRY_EVAL = "expiry_eval"
+    EKF_DIVERGENCE = "ekf_divergence"
+
+
+class Position(BaseModel):
+    """In-memory position tracking for Phase 4.
+
+    entry_price semantics:
+    - For BUY_YES: entry_price = P_kalshi (the YES price paid)
+    - For BUY_NO:  entry_price = 1 - P_kalshi (the NO price paid)
+    In both cases, entry_price is the actual dollar cost per contract.
+    PnL formulas in pnl_calculator.py depend on this convention.
+    """
+    id: str  # UUID
+    match_id: str
+    ticker: str
+    market_type: str
+    direction: str  # "BUY_YES" | "BUY_NO"
+    quantity: int
+    entry_price: float
+    entry_tick: int
+    entry_t: float  # match time at entry
+    is_paper: bool = True
+
+    # Tracking (updated each tick by check_exits)
+    unrealized_pnl: float = 0.0
+    current_p_model: float = 0.0
+    current_p_kalshi: float = 0.0
+    ticks_held: int = 0
+
+
+class ExitDecision(BaseModel):
+    """Decision to exit a position (full or partial)."""
+    position_id: str
+    trigger: ExitTrigger
+    contracts_to_exit: int  # full position for most triggers; partial for POSITION_TRIM
+    exit_price: float       # price to exit at (current P_kalshi)
+    reason: str             # human-readable explanation
+
+
+class OrderStatus(str, Enum):
+    PENDING = "pending"
+    FILLED = "filled"
+    PARTIAL = "partial"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+class ExposureStatus(str, Enum):
+    RESERVED = "reserved"
+    CONFIRMED = "confirmed"
+    RELEASED = "released"
+
+
+class SettlementResult(BaseModel):
+    position_id: int
+    ticker: str
+    market_type: str
+    direction: str
+    quantity: int
+    outcome_occurred: bool
+    settlement_price: float  # 1.0 or 0.0
+    realized_pnl: float
+
+class MatchPnL(BaseModel):
+    match_id: str
+    total_pnl: float
+    trade_count: int
+    win_count: int
+    loss_count: int
+    positions: list[dict]

@@ -175,13 +175,6 @@ class LiveMatchModel:
         if result.market_implied is not None:
             pre_match_home_prob = result.market_implied.home_win
 
-        updater = InPlayStrengthUpdater(
-            a_H_init=result.a_H,
-            a_A_init=result.a_A,
-            sigma_a_sq=sigma_a ** 2,
-            pre_match_home_prob=pre_match_home_prob,
-        )
-
         # v5: Load asymmetric delta if available
         delta_H_pos = np.array(params["delta_H_pos"], dtype=np.float64) if params.get("delta_H_pos") else None
         delta_H_neg = np.array(params["delta_H_neg"], dtype=np.float64) if params.get("delta_H_neg") else None
@@ -202,6 +195,17 @@ class LiveMatchModel:
             a_A_init=result.a_A,
             P_0=ekf_P0,
             sigma_omega_sq=sigma_omega_sq,
+        )
+
+        # Share the same EKF instance with the strength updater so that
+        # tick_loop predict steps and goal/no-goal updates all operate on
+        # one consistent state, and TickPayload reports correct P_H/P_A.
+        updater = InPlayStrengthUpdater(
+            a_H_init=result.a_H,
+            a_A_init=result.a_A,
+            sigma_a_sq=sigma_a ** 2,
+            pre_match_home_prob=pre_match_home_prob,
+            ekf_tracker=ekf_tracker,
         )
 
         # v5: Create HMM estimator (stub, degrades to DomIndex)

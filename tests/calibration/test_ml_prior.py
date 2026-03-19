@@ -18,4 +18,18 @@ def test_mle_fallback():
 
 def test_C_time_default():
     C = compute_C_time(np.zeros(6))
-    assert C == 90.0  # 6 periods * 15 min each
+    assert C == 90.0  # 6 periods * 15 min each (backward-compatible default)
+
+
+def test_C_time_with_basis_bounds():
+    """v5 8-period basis: compute_C_time uses actual period widths."""
+    b = np.zeros(8)
+    # basis_bounds with alpha_1=2: [0, 15, 30, 47, 62, 77, 87, 92, 93]
+    # widths: 15 + 15 + 17 + 15 + 15 + 10 + 5 + 1 = 93
+    bounds = np.array([0.0, 15.0, 30.0, 47.0, 62.0, 77.0, 87.0, 92.0, 93.0])
+    C = compute_C_time(b, basis_bounds=bounds)
+    assert C == 93.0  # sum of actual period widths with exp(0)=1
+
+    # Without basis_bounds, same 8-element b gives 120 (8 * 15)
+    C_old = compute_C_time(b)
+    assert C_old == 120.0

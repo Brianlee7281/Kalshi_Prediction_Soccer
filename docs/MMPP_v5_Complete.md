@@ -940,28 +940,26 @@ the starting point is already close to the solution.
 
 #### Step 3 — Time-profile correction: intensities to initial strength
 
-`λ_H` and `λ_A` represent the full-match average scoring rates. But the
-MMPP intensity function at kickoff (t = 0, ΔS = 0, X = 11v11) is:
+`λ_H` and `λ_A` represent the full-match expected goals (the Poisson
+parameters from Step 2). To recover `a_H(0)`, we integrate the MMPP
+intensity over the full match at kickoff conditions (X = 0, ΔS = 0):
 
 ```
-λ_H(t=0) = exp(a_H(0) + f(0) + γ_H[0] + δ_H(0))
+E[goals_H] = exp(a_H) × Σ_{k=0}^{5} exp(b[k]) × Δτ_k = exp(a_H) × C_time
 ```
 
-At kickoff: f(0) = b[0] (first time-profile basis coefficient), γ_H[0] = 0
-(no red cards), δ_H(0) = 0 (level score). Therefore:
+where `C_time = Σ exp(b[k]) × 15` is the integrated time profile
+(6 bins × 15 minutes each). Therefore:
 
 ```
-λ_H = exp(a_H(0) + b[0])
-→ a_H(0) = log(λ_H) − b[0]
-
-λ_A = exp(a_A(0) + b[0])
-→ a_A(0) = log(λ_A) − b[0]
+a_H(0) = log(λ_H) − log(C_time) = log(λ_H / C_time)
+a_A(0) = log(λ_A) − log(C_time) = log(λ_A / C_time)
 ```
 
-Subtracting `b[0]` is essential. Without it, the initial team strength
-would absorb the time-profile offset, causing the EKF to start from a
-miscalibrated baseline. The b[0] correction ensures `a_H(0)` and `a_A(0)`
-represent pure team strength, independent of the time period.
+Dividing by `C_time` (equivalently, subtracting `log(C_time)`) is essential.
+It correctly accounts for the entire time-varying intensity profile, not just
+the first bin. The resulting `a_H(0)` and `a_A(0)` represent pure team
+strength, independent of the time period.
 
 ---
 

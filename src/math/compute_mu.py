@@ -92,7 +92,10 @@ def compute_remaining_mu(
     ds = override_delta_S if override_delta_S is not None else model.delta_S
 
     # delta index: ΔS → {0: ≤-2, 1: -1, 2: 0, 3: +1, 4: ≥+2}
-    di = max(0, min(4, ds + 2))
+    # Home uses home perspective (ds + 2), away uses away perspective (-ds + 2)
+    # to match MLE calibration in phase1_mle.py _add_segments
+    di_H = max(0, min(4, ds + 2))
+    di_A = max(0, min(4, -ds + 2))
 
     if t >= T:
         return 0.0, 0.0
@@ -136,10 +139,10 @@ def compute_remaining_mu(
             p_j = float(p_row[j])
             if p_j > 0.0:
                 contrib_H += p_j * np.exp(
-                    model.a_H + b_val + float(model.gamma_H[j]) + float(model.delta_H[di])
+                    model.a_H + b_val + float(model.gamma_H[j]) + float(model.delta_H[di_H])
                 )
                 contrib_A += p_j * np.exp(
-                    model.a_A + b_val + float(model.gamma_A[j]) + float(model.delta_A[di])
+                    model.a_A + b_val + float(model.gamma_A[j]) + float(model.delta_A[di_A])
                 )
 
         mu_H += contrib_H * delta_tau
@@ -175,19 +178,21 @@ def compute_remaining_mu_v5(
     X = model.current_state_X
     ds = override_delta_S if override_delta_S is not None else model.delta_S
 
-    # delta index: ΔS → {0: ≤-2, 1: -1, 2: 0, 3: +1, 4: ≥+2}
-    di = max(0, min(4, ds + 2))
+    # delta index: each team uses its own perspective to match MLE calibration
+    # Home uses home perspective (ds + 2), away uses away perspective (-ds + 2)
+    di_H = max(0, min(4, ds + 2))
+    di_A = max(0, min(4, -ds + 2))
 
     if t >= T:
         return 0.0, 0.0
 
     # Asymmetric delta lookup
     if ds > 0:  # home leading
-        dH_val = float(model.delta_H_pos[di])
-        dA_val = float(model.delta_A_pos[di])
+        dH_val = float(model.delta_H_pos[di_H])
+        dA_val = float(model.delta_A_pos[di_A])
     else:  # trailing or tied
-        dH_val = float(model.delta_H_neg[di])
-        dA_val = float(model.delta_A_neg[di])
+        dH_val = float(model.delta_H_neg[di_H])
+        dA_val = float(model.delta_A_neg[di_A])
 
     # Stoppage parameters
     eta_H = getattr(model, "eta_H", 0.0)

@@ -113,9 +113,14 @@ class InPlayStrengthUpdater:
         self.a_H = self.ekf.a_H
         self.a_A = self.ekf.a_A
 
-    def compute_surprise_score(self, team: str, P_model_home_win: float) -> float:
+    def compute_surprise_score(
+        self,
+        team: str,
+        P_model_home_win: float,
+        P_model_away_win: float | None = None,
+    ) -> float:
         """SurpriseScore = 1 - P(scoring team wins)."""
-        return self.ekf.compute_surprise_score(team, P_model_home_win)
+        return self.ekf.compute_surprise_score(team, P_model_home_win, P_model_away_win)
 
     def classify_goal(self, team: str) -> GoalClassification:
         """Classify goal using pre_match_home_prob thresholds.

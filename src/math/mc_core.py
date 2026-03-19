@@ -85,20 +85,27 @@ def _mc_simulate_core(
                     bi = k
                     break
 
-            # Delta index: ΔS -> {0: ≤-2, 1: -1, 2: 0, 3: +1, 4: ≥+2}
-            di = sd + 2
-            if di < 0:
-                di = 0
-            elif di > 4:
-                di = 4
+            # Delta index: each team uses its own perspective
+            # Home: di_H = clamp(sd + 2, 0, 4)
+            # Away: di_A = clamp(-sd + 2, 0, 4) to match MLE calibration
+            di_H = sd + 2
+            if di_H < 0:
+                di_H = 0
+            elif di_H > 4:
+                di_H = 4
+            di_A = -sd + 2
+            if di_A < 0:
+                di_A = 0
+            elif di_A > 4:
+                di_A = 4
 
             # Asymmetric delta lookup
             if sd > 0:  # home leading
-                dH = delta_H_pos[di]
-                dA = delta_A_pos[di]
+                dH = delta_H_pos[di_H]
+                dA = delta_A_pos[di_A]
             else:  # trailing or tied
-                dH = delta_H_neg[di]
-                dA = delta_A_neg[di]
+                dH = delta_H_neg[di_H]
+                dA = delta_A_neg[di_A]
 
             # Stoppage time eta multiplier
             eta_h = 0.0

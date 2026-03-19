@@ -132,7 +132,8 @@ async def test_load_production_params():
         assert "version" in params
         assert isinstance(params["Q"], list)
         assert isinstance(params["b"], list)
-        assert len(params["b"]) == 6
+        # v4 calibration produces 6-element b, v5 produces 8-element b
+        assert len(params["b"]) in (6, 8)
     else:
         pytest.skip("DB not available or no params for league 1204")
 

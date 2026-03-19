@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from src.common.logging import get_logger
 from src.common.types import MarketProbs, TickPayload
+from src.engine.intensity import basis_index as _basis_index, compute_lambda as _compute_lambda
 from src.engine.mc_pricing import compute_mc_prices
 
 if TYPE_CHECKING:
@@ -122,25 +123,6 @@ async def tick_loop(
         await _sleep_until_next_tick(start_time, model.tick_count)
 
     logger.info("tick_loop_finished", match_id=model.match_id, ticks=model.tick_count)
-
-
-def _compute_lambda(model: LiveMatchModel, team: str) -> float:
-    """Compute current goal intensity for a team."""
-    bi = _basis_index(model.t, model.basis_bounds)
-    b_val = float(model.b[bi]) if bi < len(model.b) else 0.0
-    st = model.current_state_X
-    if team == "home":
-        return math.exp(model.a_H + b_val + float(model.gamma_H[st]))
-    else:
-        return math.exp(model.a_A + b_val + float(model.gamma_A[st]))
-
-
-def _basis_index(t: float, basis_bounds) -> int:
-    """Find which basis period t falls into."""
-    for i in range(len(basis_bounds) - 1):
-        if t < float(basis_bounds[i + 1]):
-            return i
-    return len(basis_bounds) - 2
 
 
 async def _publish_tick_to_redis(

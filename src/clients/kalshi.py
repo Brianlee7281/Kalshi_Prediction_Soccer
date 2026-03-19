@@ -215,6 +215,18 @@ class KalshiClient:
         data = await self._get("/trade-api/v2/portfolio/positions")
         return data.get("market_positions", [])
 
+    async def get_order(self, order_id: str) -> dict:
+        """GET /trade-api/v2/portfolio/orders/{order_id}"""
+        return await self._get(f"/trade-api/v2/portfolio/orders/{order_id}")
+
+    async def get_fills(self, ticker: str, limit: int = 100) -> list[dict]:
+        """GET /trade-api/v2/portfolio/fills?ticker={ticker}"""
+        data = await self._get(
+            "/trade-api/v2/portfolio/fills",
+            params={"ticker": ticker, "limit": str(limit)},
+        )
+        return data.get("fills", [])
+
     # ─── Lifecycle ───────────────────────────────────────────
 
     async def close(self) -> None:

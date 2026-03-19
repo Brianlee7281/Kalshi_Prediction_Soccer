@@ -16,12 +16,24 @@ from src.calibration.team_aliases import normalize_team_name
 log = structlog.get_logger(__name__)
 
 
-def compute_C_time(b: np.ndarray) -> float:
-    """Time normalization constant: C = sum(exp(b[k]) * delta_tau_k).
+def compute_C_time(
+    b: np.ndarray,
+    basis_bounds: np.ndarray | None = None,
+) -> float:
+    """Time normalization constant: C = sum(exp(b[k]) * width[k]).
 
-    Each of the 6 basis periods spans 15 minutes.
-    For initial b=[0,0,0,0,0,0], C = 6*15 = 90.
+    When *basis_bounds* is provided and its length matches ``len(b) + 1``,
+    each period width is taken from ``np.diff(basis_bounds)``.  This is the
+    correct calculation for the v5 8-period basis where periods have variable
+    widths (e.g. [15, 15, 17, 15, 15, 10, 5, 1] totalling 93 min).
+
+    When *basis_bounds* is ``None`` (backward-compatible default), every
+    period is assumed to be 15 minutes wide.  With 6 elements this gives
+    C = 6 * 15 = 90, matching the original v4 convention.
     """
+    if basis_bounds is not None and len(basis_bounds) == len(b) + 1:
+        widths = np.diff(basis_bounds)
+        return float(np.sum(np.exp(b) * widths))
     delta_tau = 15.0
     return float(np.sum(np.exp(b) * delta_tau))
 

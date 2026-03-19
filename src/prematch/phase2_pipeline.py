@@ -75,7 +75,21 @@ async def run_phase2(
 
     b = np.array(params["b"])
     Q = np.array(params["Q"])
-    C_time = compute_C_time(b)
+
+    # Construct basis_bounds so compute_C_time uses actual period widths.
+    # This matches the same construction in LiveMatchModel.from_phase2_result.
+    T_exp = 93.0
+    alpha_1 = params.get("alpha_1", 0.0)
+    basis_bounds: np.ndarray | None = None
+    if len(b) == 8:
+        basis_bounds = np.array(
+            [0.0, 15.0, 30.0,
+             45.0 + alpha_1, 60.0 + alpha_1, 75.0 + alpha_1,
+             85.0 + alpha_1, 90.0 + alpha_1, T_exp],
+            dtype=np.float64,
+        )
+
+    C_time = compute_C_time(b, basis_bounds)
     param_version = params["version"]
 
     # Step 2: Collect pre-match odds from Odds-API
@@ -97,7 +111,7 @@ async def run_phase2(
 
     # Tier 1: Backsolve from Odds-API (Bet365 / Betfair Exchange)
     if odds_api_implied is not None:
-        a_H, a_A = backsolve_intensities(odds_api_implied, b, Q)
+        a_H, a_A = backsolve_intensities(odds_api_implied, b, Q, basis_bounds)
         prediction_method = "backsolve_odds_api"
         market_implied = odds_api_implied
         log.info("phase2_tier1_odds_api", a_H=a_H, a_A=a_A)
@@ -105,7 +119,7 @@ async def run_phase2(
         # Tier 2: Backsolve from Pinnacle closing odds (football-data.co.uk)
         pinnacle_implied = _fetch_pinnacle_odds(league_id, home_team, away_team)
         if pinnacle_implied is not None:
-            a_H, a_A = backsolve_intensities(pinnacle_implied, b, Q)
+            a_H, a_A = backsolve_intensities(pinnacle_implied, b, Q, basis_bounds)
             prediction_method = "backsolve_pinnacle"
             market_implied = pinnacle_implied
             log.info("phase2_tier2_pinnacle", a_H=a_H, a_A=a_A)
@@ -315,6 +329,7 @@ def backsolve_intensities(
     odds_implied: MarketProbs,
     b: np.ndarray,
     Q: np.ndarray,
+    basis_bounds: np.ndarray | None = None,
 ) -> tuple[float, float]:
     """Backsolve a_H, a_A from market-implied probabilities.
 
@@ -322,13 +337,18 @@ def backsolve_intensities(
     those probabilities via the Poisson model. Uses scipy.optimize.minimize
     with an informed initial guess from implied expected goals.
 
+    Args:
+        basis_bounds: When provided, ``compute_C_time`` uses actual period
+            widths instead of the 15-min default.  This ensures the
+            backsolve is consistent with ``compute_remaining_mu``.
+
     Initial guess:
       implied_home_goals ≈ 1.5 * home_win + 1.0 * draw + 0.5 * away_win
       implied_away_goals ≈ 0.5 * home_win + 1.0 * draw + 1.5 * away_win
       a_H_0 = ln(implied_home_goals / C_time)
       a_A_0 = ln(implied_away_goals / C_time)
     """
-    C_time = compute_C_time(b)
+    C_time = compute_C_time(b, basis_bounds)
 
     def objective(params: np.ndarray) -> float:
         a_h, a_a = params
@@ -656,4 +676,5 @@ def _skip_result(
         kalshi_tickers={},
         market_implied=None,
         prediction_method="league_mle",
+        ekf_P0=0.50,
     )

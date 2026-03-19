@@ -109,7 +109,8 @@ def mmpp_mc_prices(
         return {"home_win": 0.0, "draw": 1.0, "away_win": 0.0, "mu_H": 0.0, "mu_A": 0.0}
 
     ds = max(-2, min(2, score_h - score_a))
-    di = ds + 2
+    di_H = ds + 2
+    di_A = -ds + 2  # away perspective to match MLE calibration
     basis_bounds = [0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 85.0, 90.0, T_exp]
     mu_H = 0.0
     mu_A = 0.0
@@ -119,8 +120,8 @@ def mmpp_mc_prices(
         if seg_start >= seg_end:
             continue
         dt = seg_end - seg_start
-        mu_H += dt * math.exp(a_H + b[k] + gamma_H[state_X] + delta_H[di])
-        mu_A += dt * math.exp(a_A + b[k] + gamma_A[state_X] + delta_A[di])
+        mu_H += dt * math.exp(a_H + b[k] + gamma_H[state_X] + delta_H[di_H])
+        mu_A += dt * math.exp(a_A + b[k] + gamma_A[state_X] + delta_A[di_A])
 
     mu_H = max(0.001, mu_H)
     mu_A = max(0.001, mu_A)

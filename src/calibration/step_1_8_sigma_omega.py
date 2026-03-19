@@ -15,7 +15,9 @@ logger = structlog.get_logger()
 
 _MIN_MATCHES = 30
 _EPSILON = 0.01
-_DEFAULT_SIGMA_OMEGA_SQ = 0.01
+# Calibrated via MLE on 2,278 EPL matches (see scripts/calibrate_sigma_omega.py).
+# K at t=78 = 0.38 (target 0.3-0.5), late-equaliser P(D) = 0.739 (actual ~0.59).
+_DEFAULT_SIGMA_OMEGA_SQ = 0.003
 
 
 def estimate_sigma_omega_sq(
