@@ -5,6 +5,9 @@ Usage: python scripts/run_phase2.py --league EPL
 import asyncio
 import argparse
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from src.prematch.phase2_pipeline import run_phase2
 from src.clients.goalserve import GoalserveClient
 from src.common.config import Config
@@ -34,6 +37,7 @@ async def main() -> None:
 
     fixture = fixtures[0]
     print(f"Next match: {fixture['home_team']} vs {fixture['away_team']}")
+    print(f"Match ID: {fixture['match_id']}")
     print(f"Kickoff: {fixture['kickoff_utc']}")
 
     result = await run_phase2(

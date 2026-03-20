@@ -15,9 +15,11 @@ import sys
 from pathlib import Path
 
 import structlog
+from dotenv import load_dotenv
+load_dotenv()
 
 from src.common.types import Phase2Result
-from src.engine.goalserve_poller import goalserve_poller
+from src.engine.kalshi_live_poller import kalshi_live_poller
 from src.engine.model import LiveMatchModel
 from src.engine.odds_api_listener import odds_api_listener
 from src.engine.odds_consensus import OddsConsensus
@@ -88,7 +90,7 @@ async def run_live(match_id: str, league: str) -> None:
         await asyncio.gather(
             tick_loop(model),
             odds_api_listener(model),
-            goalserve_poller(model),
+            kalshi_live_poller(model),
         )
     finally:
         recorder.finalize()

@@ -8,7 +8,7 @@ def get_logger(name: str) -> structlog.BoundLogger:
             structlog.processors.add_log_level,
             structlog.dev.ConsoleRenderer(),
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(0),
+        wrapper_class=structlog.make_filtering_bound_logger(20),
         cache_logger_on_first_use=True,
     )
     return structlog.get_logger(name)

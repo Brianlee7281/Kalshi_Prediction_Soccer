@@ -28,7 +28,7 @@ logger = get_logger("recorder")
 _FLUSH_EVERY_N = 10
 _FLUSH_EVERY_S = 5.0
 
-_STREAM_NAMES = ("odds_api", "kalshi_ob", "goalserve", "ticks", "events")
+_STREAM_NAMES = ("odds_api", "kalshi_ob", "goalserve", "ticks", "events", "kalshi_live_data")
 
 
 class MatchRecorder:
@@ -94,6 +94,10 @@ class MatchRecorder:
     def record_event(self, event: dict) -> None:
         """Append detected event with _ts."""
         self._write("events", event)
+
+    def record_kalshi_live_data(self, state_dict: dict) -> None:
+        """Append raw Kalshi live_data poll response with _ts."""
+        self._write("kalshi_live_data", state_dict)
 
     def finalize(self) -> None:
         """Write metadata.json, close all file handles."""

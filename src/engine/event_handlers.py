@@ -59,6 +59,9 @@ def handle_goal(
         delta_S=model.delta_S,
     )
 
+    if model.hmm_estimator is not None:
+        model.hmm_estimator.record_goal(model.t, team)
+
     if model.strength_updater is not None:
         # Compute current intensities so the v5 EKF goal-update path fires
         # (without these kwargs, update_on_goal falls back to v4 Bayesian).

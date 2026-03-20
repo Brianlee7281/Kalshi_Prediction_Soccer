@@ -73,6 +73,7 @@ class LiveMatchModel:
     Q: np.ndarray  # shape (4,4) generator matrix
     basis_bounds: np.ndarray  # shape (9,) basis period boundaries
     kalshi_tickers: dict[str, str]  # {"home_win": "KX...", ...}
+    kalshi_event_ticker: str = ""  # event-level ticker for kalshi_live_poller milestone lookup
 
     # Time management (Pattern 3)
     kickoff_wall_clock: float = 0.0

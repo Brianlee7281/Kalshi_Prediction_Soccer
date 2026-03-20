@@ -34,12 +34,16 @@ We measured this live during Brentford vs. Wolves (2026-03-16):
 | Data Source | Reaction time to a goal |
 |-------------|------------------------|
 | Kalshi participants | 0–30 seconds |
-| Goalserve API (our event feed) | 30–60 seconds |
+| Kalshi Live Data endpoint (Sportradar feed) | 3–8 seconds |
+| Goalserve API (former event feed) | 30–60 seconds |
 | Bookmakers via Odds-API | 1–3 minutes (suspended during events) |
 
 Kalshi turned out to be **faster** than all our data sources, because it has no
 suspension mechanism — participants are watching the game live and trading
-immediately. There was no speed gap to exploit.
+immediately. There was no speed gap to exploit. We subsequently discovered that
+Kalshi's own Live Data endpoint (backed by Sportradar, the same feed driving
+Kalshi's markets) delivers events in 3–8 seconds — matching the latency of
+Kalshi's own market movements and eliminating the remaining gap entirely.
 
 ---
 
@@ -270,13 +274,22 @@ Phases 5–6 are the **operational infrastructure** stages.
 
 Three live data sources feed the system during a match:
 
-**Goalserve** — our primary event source
-- Polls every 3–5 seconds
-- Provides: goals, red cards, period changes, VAR decisions
-- Also provides: live match statistics (shots on target, corners, dangerous
-  attacks, possession) — these feed Layer 2
-- 30-second delay from real world; too slow to be our price reference,
-  but accurate enough for model state updates
+**Kalshi Live Data** — our primary event source (Phase 3)
+- Endpoint: GET /trade-api/v2/live_data/soccer/{milestone_uuid}
+- Upstream: Sportradar (confirmed via source_id: sr:sport_event:...)
+- Polls every 1 second; within Basic tier read limit (20/s)
+- Provides: live score, match minute, half, match status, significant events
+  (goals, yellow/red cards with player names and timestamps)
+- last_play.occurence_ts is the real Sportradar event timestamp — used as
+  the canonical goal time in EKF updates
+- Latency: 3–8 seconds from real-world event, same as Kalshi market moves
+- Does NOT provide: shots on target, corners, possession — Layer 2 HMM
+  runs on prior only until an alternative stats source is added
+
+**Goalserve** — historical data only (Phase 1 and Phase 2)
+- Phase 1 training: 11,531 historical match commentary files
+- Phase 2: upcoming fixture lookup and team name matching
+- Not used during live match (Phase 3)
 
 **Kalshi WebSocket** — our price source and execution venue
 - Real-time order book and trade feed
@@ -1082,9 +1095,9 @@ Three concurrent processes run in parallel for every match:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  goalserve_poller    (every 3 seconds)              │
-│  Polls the Goalserve API for match events and       │
-│  live statistics. Updates model state when goals,  │
+│  kalshi_live_poller  (every 1 second)               │
+│  Polls Kalshi Live Data endpoint (Sportradar feed)  │
+│  for match events. Updates model state when goals,  │
 │  red cards, or period changes are detected.         │
 └─────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────┐
@@ -1119,9 +1132,10 @@ Each tick follows the same sequence:
      P_i += σ²_ω × dt    (uncertainty grows slightly)
    This reflects that team strength drifts slightly every second.
 
-3. Layer 2 update (when new live_stats data arrived from Goalserve)
-   Update HMM state probabilities from new shot/corner/possession data
-   OR update DomIndex if HMM is not available
+3. Layer 2 update
+   Kalshi Live Data does not provide shots/corners/possession.
+   HMM runs on prior only. DomIndex is used if available.
+   (Future: add a separate stats source to restore Layer 2 signal quality.)
 
 4. Compute adjusted intensities
    λ_H_adj = λ_H(t) × exp(φ_H × Z_t)
@@ -1169,7 +1183,7 @@ the correct absolute time anyway. No clock drift accumulates.
 
 ### 6.4 Event Handling
 
-When Goalserve reports a match event, Phase 3 handles it with specific logic
+When kalshi_live_poller detects a match event, Phase 3 handles it with specific logic
 before the next tick loop iteration:
 
 #### Goal events
@@ -1229,35 +1243,34 @@ but clamped down to 30s for conservatism during early testing).
 
 ```
 1. Freeze all order activity (ob_freeze = True)
-2. Wait for outcome from Goalserve (Package 1 score change, or
-   Package 2 summary.goals.player[].penalty confirmation)
+2. Wait for outcome from Kalshi Live Data (score change on next poll, or
+   significant_events entry confirming goal/miss)
 3. If scored: process as a normal goal via handle_goal()
 4. If missed: unfreeze, resume normal tick loop
 ```
 
 We do not attempt to adjust P_model during the 30-second penalty window.
 Penalty conversion rates vary significantly by player (roughly 60–90%)
-and Goalserve does not reliably provide the kicker's identity in real time.
+and Kalshi Live Data does not reliably provide the kicker's identity in real time.
 The ob_freeze already prevents any orders during this window, so the
 P_model imprecision carries no trading risk.
 
 #### VAR cancellations
 
-VAR cancellations are detected via two independent signals from Goalserve,
-both checked on every poll:
+VAR cancellations are detected from the Kalshi Live Data poll:
 
 ```
-Detection method 1 — Score decrease (Package 1, every 3-5s):
-  if current_score < previous_score:
+Detection method 1 — Score decrease (every 1s):
+  if home_same_game_score or away_same_game_score decreases:
     → goal was cancelled, trigger VAR rollback immediately
 
-Detection method 2 — Explicit flag (Package 2, every 30s):
-  if summary.goals.player[].var_cancelled == "True":
-    → confirms VAR cancellation for a specific goal
+Detection method 2 — last_play description (every 1s):
+  if last_play.description contains "VAR" and score did not increase:
+    → confirms VAR review in progress; maintain ob_freeze until score resolves
 ```
 
-Method 1 catches the cancellation faster (Package 1 polls every 3–5s vs
-Package 2 every 30s). Method 2 provides explicit confirmation. Both trigger
+Note: The Goalserve Package 2 explicit var_cancelled flag is no longer
+available. Method 1 remains the primary detection path. Both trigger
 the same rollback procedure:
 
 ```
@@ -1305,14 +1318,12 @@ Z_t = +1:  Home team dominant
 
 The state is "hidden" because we cannot directly observe which team is
 dominating — we can only observe signals that correlate with dominance.
-The signals come from Goalserve's live_stats feed, updated every 3–5 seconds:
-
-```
-Signal 1: Δ shots on target (home minus away since last poll)
-Signal 2: Δ corners (home minus away)
-Signal 3: Δ dangerous attacks (home minus away)
-Signal 4: possession difference (home % minus 50, centered at zero)
-```
+Historically these signals came from Goalserve's live_stats feed. With the
+migration to Kalshi Live Data (which does not provide shots/corners/possession),
+the HMM currently runs on prior only — Z_t holds its last value until a goal
+or period change forces a transition. Layer 2 adjustment is therefore constant
+between events. Re-introducing live signal input from a dedicated stats source
+is a future enhancement.
 
 For each hidden state, these signals have characteristic distributions. When
 home is dominant (Z = +1), we expect more home shots, more home corners, more
@@ -2379,7 +2390,7 @@ risks and what we do about each:
 | EKF σ²_ω is poorly estimated, causing unstable updates | Low | High | Toggle to disable EKF and fall back to fixed a_H/a_A. A/B test both. |
 | live_stats not available for Americas leagues | Medium | Medium | DomIndex fallback works without live_stats. Test each league during setup. |
 | Limit orders don't fill often enough | Medium | Medium | Measure fill rate in paper trading. Adjust pricing if needed. |
-| Goalserve live_stats feed drops during a match | Low | Low | Graceful fallback to Layer 1 only. System continues without Layer 2. |
+| Kalshi Live Data endpoint unavailable during match | Low | High | Fall back to Goalserve poller (kept in codebase as goalserve_poller.py.disabled — re-enable if needed). Layer 2 already runs on prior only. |
 | VAR cancel detected late (>90 seconds after goal) | Low | Low | Rollback stack covers 3 snapshots. Most VAR decisions come within 60s. |
 | EKF diverges (P_H grows uncontrollably) | Low | Medium | Hard clamp P_H to [0.00001, 1.5] in code. Log and alert if triggered. |
 | Kalshi market is illiquid at the moment we want to trade | Medium | Medium | Liquidity gate: always check orderbook depth before placing any order. |

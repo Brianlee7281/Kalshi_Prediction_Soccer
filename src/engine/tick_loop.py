@@ -69,7 +69,7 @@ async def tick_loop(
             model.a_H = model.strength_updater.a_H
             model.a_A = model.strength_updater.a_A
 
-        # Step 4: Layer 2 — HMM/DomIndex already updated by goalserve_poller
+        # Step 4: Layer 2 — HMM/DomIndex already updated by kalshi_live_poller
 
         # Step 5: MC simulation
         P_model, sigma_MC = await compute_mc_prices(model)

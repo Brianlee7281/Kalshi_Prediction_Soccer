@@ -1,3 +1,4 @@
+# DISABLED Sprint KLD-5: replaced by kalshi_live_poller. Kept for reference.
 """Goalserve poller — polls live scores every 3s and dispatches events.
 
 Runs as a coroutine alongside tick_loop and odds_api_listener. Detects
@@ -43,6 +44,12 @@ async def goalserve_poller(model: LiveMatchModel) -> None:
     client = GoalserveClient(api_key)
     first_poll = True
 
+    # Shared lock prevents double-firing when both pollers run in parallel
+    event_lock: asyncio.Lock | None = getattr(model, "_event_lock", None)
+    if event_lock is None:
+        event_lock = asyncio.Lock()
+        model._event_lock = event_lock  # type: ignore[attr-defined]
+
     try:
         while model.engine_phase != "FINISHED":
             try:
@@ -84,18 +91,24 @@ async def goalserve_poller(model: LiveMatchModel) -> None:
             if first_poll and status in ("HT", "FT") or status.isdigit():
                 first_poll = False
 
-            # Detect events by comparing poll with model state
-            events = detect_events_from_poll(model, match_data)
-
-            # Dispatch events
-            for event in events:
-                etype = event["type"]
-                if etype == "goal":
-                    handle_goal(model, event["team"], event["minute"])
-                elif etype == "red_card":
-                    handle_red_card(model, event["team"], event["minute"])
-                elif etype == "period_change":
-                    handle_period_change(model, event["new_phase"])
+            # Detect + dispatch under lock to prevent double-firing with kalshi_live_poller
+            async with event_lock:
+                events = detect_events_from_poll(model, match_data)
+                for event in events:
+                    etype = event["type"]
+                    if etype == "goal":
+                        logger.info(
+                            "goal_source",
+                            source="goalserve",
+                            team=event["team"],
+                            minute=event["minute"],
+                            match_id=model.match_id,
+                        )
+                        handle_goal(model, event["team"], event["minute"])
+                    elif etype == "red_card":
+                        handle_red_card(model, event["team"], event["minute"])
+                    elif etype == "period_change":
+                        handle_period_change(model, event["new_phase"])
 
             # v5: Extract live_stats for Layer 2 HMM/DomIndex
             live_stats = _extract_live_stats(match_data)
