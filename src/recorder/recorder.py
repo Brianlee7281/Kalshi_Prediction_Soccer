@@ -51,7 +51,7 @@ class MatchRecorder:
         handle = self._handles.get(stream)
         if handle is None:
             path = self.dir / f"{stream}.jsonl"
-            handle = open(path, "a", encoding="utf-8")  # noqa: SIM115
+            handle = open(path, "w", encoding="utf-8")  # noqa: SIM115
             self._handles[stream] = handle
         return handle
 

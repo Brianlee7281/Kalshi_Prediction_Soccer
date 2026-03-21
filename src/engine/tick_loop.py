@@ -49,8 +49,8 @@ async def tick_loop(
     while model.engine_phase != "FINISHED":
         model.tick_count += 1
 
-        # Cooldown management
-        if model.cooldown and model.tick_count >= model.cooldown_until_tick:
+        # Cooldown management (time-based, works for both live and replay)
+        if model.cooldown and model.t >= model.cooldown_until_t:
             model.cooldown = False
             model.event_state = "IDLE"
 

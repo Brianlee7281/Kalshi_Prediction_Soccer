@@ -150,8 +150,16 @@ async def execution_loop(
                         )
                     except Exception as exc:
                         log.error("exit_db_error", error=str(exc))
-                await exposure.update_bankroll(realized_pnl)
-                bankroll += realized_pnl
+                # Return the exit proceeds to bankroll.  Entry cost was
+                # deducted on open, so we credit back the exit revenue.
+                # BUY_YES exit: sell YES → receive exit_price × qty
+                # BUY_NO exit: sell NO → receive (1 - exit_price) × qty
+                if pos.direction == "BUY_YES":
+                    exit_revenue = fill.price * fill.quantity
+                else:
+                    exit_revenue = (1.0 - fill.price) * fill.quantity
+                await exposure.update_bankroll(exit_revenue)
+                bankroll += exit_revenue
                 if redis_client:
                     await publish_position_update(redis_client, pos, "exit")
 

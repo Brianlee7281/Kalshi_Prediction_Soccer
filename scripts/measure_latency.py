@@ -28,6 +28,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -583,14 +584,16 @@ def resolve_kalshi_tickers(event_ticker: str) -> tuple[list[str], str, str]:
     tickers = [m["ticker"] for m in markets if m.get("ticker")]
 
     # Extract team names from the first market title
-    # Kalshi titles look like "Arsenal vs Chelsea - Winner"
+    # Kalshi titles: "Arsenal vs Chelsea - Winner" or "Arsenal vs Chelsea" + subtitle "Winner?"
     home_team = ""
     away_team = ""
     title = markets[0].get("title", "") + " " + markets[0].get("subtitle", "")
     if " vs " in title:
         parts = title.split(" vs ")
         home_team = parts[0].strip()
-        away_team = parts[1].split(" - ")[0].strip() if " - " in parts[1] else parts[1].strip()
+        raw_away = parts[1].split(" - ")[0].strip() if " - " in parts[1] else parts[1].strip()
+        # Strip trailing Kalshi suffixes (e.g. "Manchester United Winner?")
+        away_team = re.sub(r"\s*(Winner\??|Draw\??|Tie\??)$", "", raw_away).strip()
 
     return tickers, home_team, away_team
 

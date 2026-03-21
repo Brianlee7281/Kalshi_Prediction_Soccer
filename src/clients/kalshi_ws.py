@@ -122,24 +122,39 @@ class KalshiWSClient:
 
         while not self._stop.is_set():
             try:
+                # Include RSA-PSS auth headers in HTTP upgrade request
+                extra_headers = {}
+                if self._private_key is not None:
+                    timestamp_ms = str(int(time.time() * 1000))
+                    message = (timestamp_ms + "GET" + "/trade-api/ws/v2").encode()
+                    signature = base64.b64encode(
+                        self._private_key.sign(
+                            message,
+                            padding.PSS(
+                                mgf=padding.MGF1(hashes.SHA256()),
+                                salt_length=padding.PSS.MAX_LENGTH,
+                            ),
+                            hashes.SHA256(),
+                        )
+                    ).decode()
+                    extra_headers = {
+                        "KALSHI-ACCESS-KEY": self._api_key,
+                        "KALSHI-ACCESS-TIMESTAMP": timestamp_ms,
+                        "KALSHI-ACCESS-SIGNATURE": signature,
+                    }
+
                 async with websockets.connect(
-                    self._ws_url, max_size=10_000_000
+                    self._ws_url,
+                    max_size=10_000_000,
+                    additional_headers=extra_headers,
                 ) as ws:
                     self._ws = ws
                     self._connected = True
                     attempt = 0
                     log.info("kalshi_ws_connected", url=self._ws_url)
 
-                    # Authenticate (skipped in replay mode)
-                    auth_msg = self._sign_ws_auth()
-                    if auth_msg is not None:
-                        await ws.send(json.dumps(auth_msg))
-
-                    # Wait for auth response
-                    auth_resp = json.loads(await ws.recv())
-                    if auth_resp.get("type") == "error":
-                        log.error("kalshi_ws_auth_failed", response=auth_resp)
-                        break
+                    # Auth is handled via HTTP headers on connect.
+                    # In replay mode (no private key), no auth needed.
 
                     # Subscribe to orderbook channels
                     for ticker in tickers:

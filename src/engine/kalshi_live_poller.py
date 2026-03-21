@@ -204,7 +204,7 @@ def _detect_events_from_state(
         team = ev.get("team", "")
         player = ev.get("player", "")
         ev_time = ev.get("time", "")
-        dedup_key = f"{team}_{player}_{ev_time}"
+        dedup_key = f"{team}_{player}"
         if dedup_key in processed:
             continue
         processed.add(dedup_key)

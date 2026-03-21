@@ -300,6 +300,9 @@ class Position(BaseModel):
     entry_t: float  # match time at entry
     is_paper: bool = True
 
+    # Database ID (set after save_position)
+    db_id: int | None = None
+
     # Tracking (updated each tick by check_exits)
     unrealized_pnl: float = 0.0
     current_p_model: float = 0.0

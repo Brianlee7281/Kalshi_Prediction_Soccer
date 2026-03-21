@@ -557,7 +557,7 @@ def run_phase3(model: LiveMatchModel) -> None:  # noqa: C901 — diagnostic scri
 
         # ── Cooldown management ───────────────────────────────────
         model.tick_count += 1
-        if model.cooldown and model.tick_count >= model.cooldown_until_tick:
+        if model.cooldown and model.t >= model.cooldown_until_t:
             model.cooldown = False
             model.event_state = "IDLE"
 

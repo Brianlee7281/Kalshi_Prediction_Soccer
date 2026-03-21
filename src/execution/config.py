@@ -12,7 +12,7 @@ class ExecutionConfig:
     # Edge detection (§8.2)
     C_SPREAD: float = 0.01             # Kalshi effective spread
     C_SLIPPAGE: float = 0.005          # limit order execution delay cost
-    Z_ALPHA: float = 1.645             # 95% one-tailed confidence
+    Z_ALPHA: float = 1.0               # ~84% one-tailed confidence
     N_MC: int = 50_000                 # Monte Carlo paths
 
     # Kelly sizing (§8.4, patterns.md Pattern 5)

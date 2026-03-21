@@ -31,6 +31,7 @@ load_dotenv()
 
 import numpy as np
 
+from src.clients.kalshi import KalshiClient
 from src.clients.kalshi_ws import KalshiWSClient
 from src.common.logging import get_logger
 from src.engine.kalshi_live_poller import kalshi_live_poller
@@ -119,13 +120,58 @@ def _build_model(args: argparse.Namespace) -> LiveMatchModel:
     )
 
 
+async def _resolve_kalshi_tickers(
+    api_key: str,
+    private_key_path: str,
+    event_ticker: str,
+) -> dict[str, str]:
+    """Fetch open GAME markets for the event and return {outcome: ticker} map.
+
+    E.g. {"home_win": "KXEPLGAME-26MAR21FULBUR-FUL",
+          "draw":     "KXEPLGAME-26MAR21FULBUR-TIE",
+          "away_win": "KXEPLGAME-26MAR21FULBUR-BUR"}
+    """
+    client = KalshiClient(api_key=api_key, private_key_path=private_key_path)
+    try:
+        # Series ticker = event_ticker (the GAME prefix series)
+        # We need the series that the event belongs to — extract from event_ticker
+        # e.g. KXEPLGAME-26MAR21FULBUR → series = KXEPLGAME
+        parts = event_ticker.split("-", 1)
+        series = parts[0] if parts else event_ticker
+
+        markets = await client.get_markets(series_ticker=series, status="open")
+        tickers: dict[str, str] = {}
+        for m in markets:
+            if m.get("event_ticker") != event_ticker:
+                continue
+            ticker = m["ticker"]
+            # Outcome tickers end with -TIE for draw, else team code
+            if ticker.endswith("-TIE"):
+                tickers["draw"] = ticker
+            elif not tickers.get("home_win"):
+                tickers["home_win"] = ticker
+            else:
+                tickers["away_win"] = ticker
+
+        return tickers
+    finally:
+        await client.close()
+
+
 async def _record(
     args: argparse.Namespace,
     api_key: str,
     private_key_path: str,
 ) -> None:
     """Run the three Phase 3 coroutines with a recorder attached."""
+    # Resolve market tickers for orderbook subscription
+    kalshi_tickers = await _resolve_kalshi_tickers(
+        api_key, private_key_path, args.event_ticker,
+    )
+    log.info("resolved_kalshi_tickers", tickers=kalshi_tickers)
+
     model = _build_model(args)
+    model.kalshi_tickers = kalshi_tickers
     recorder = MatchRecorder(match_id=args.match_id)
     model.recorder = recorder  # type: ignore[attr-defined]
 

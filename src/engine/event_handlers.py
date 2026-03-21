@@ -17,9 +17,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("engine.event_handlers")
 
-# Cooldown durations (in ticks)
-_GOAL_COOLDOWN_TICKS = 50
-_RED_CARD_COOLDOWN_TICKS = 30
+# Cooldown durations in match-minutes (not ticks — ticks can be 1s live or 1min replay)
+_GOAL_COOLDOWN_MINUTES = 1.0     # ~60s of match time after a goal
+_RED_CARD_COOLDOWN_MINUTES = 0.5  # ~30s of match time after a red card
 
 # Markov state transitions for red cards
 # State encoding: 0=11v11, 1=10v11(home red), 2=11v10(away red), 3=10v10
@@ -36,7 +36,7 @@ def handle_goal(
 
     - Update score, delta_S
     - Set event_state = CONFIRMED
-    - Set cooldown = True, cooldown_until_tick = tick_count + 50
+    - Set cooldown = True, cooldown_until_t = t + 1.0 minute
     """
     home, away = model.score
     if team == "home":
@@ -47,8 +47,6 @@ def handle_goal(
     model.score = (home, away)
     model.delta_S = home - away
     model.event_state = "CONFIRMED"
-    model.cooldown = True
-    model.cooldown_until_tick = model.tick_count + _GOAL_COOLDOWN_TICKS
 
     logger.info(
         "goal_handled",
@@ -102,7 +100,7 @@ def handle_red_card(
         )
 
     model.cooldown = True
-    model.cooldown_until_tick = model.tick_count + _RED_CARD_COOLDOWN_TICKS
+    model.cooldown_until_t = model.t + _RED_CARD_COOLDOWN_MINUTES
 
     logger.info(
         "red_card_handled",

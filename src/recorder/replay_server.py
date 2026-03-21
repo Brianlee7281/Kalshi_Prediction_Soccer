@@ -10,6 +10,11 @@ Data sources (from data/latency/{match}/):
     odds_api.jsonl      → WS endpoint (bookmaker odds updates)
 
 Timestamp field: _ts_mono (monotonic seconds from recording start).
+
+Synchronization: The HTTP poller is the master clock. Each poll advances
+``_replay_ts`` to the current record's timestamp.  The Kalshi WS handler
+sends all orderbook records whose timestamp is ≤ ``_replay_ts``, ensuring
+the orderbook is always caught up before the next tick fires.
 """
 
 from __future__ import annotations
@@ -106,8 +111,25 @@ class ReplayServer:
         self.kalshi_ob_records = _load_jsonl(self.recording_dir / "kalshi.jsonl")
         self.odds_api_records = _load_jsonl(self.recording_dir / "odds_api.jsonl")
 
+        # Pre-serialize kalshi OB records: list of (ts, json_str) tuples.
+        # Avoids per-message json.dumps overhead for 290K+ records.
+        self._kalshi_ob_prepared: list[tuple[float, str]] = [
+            (_get_ts(r), json.dumps(_strip_ts(r)))
+            for r in self.kalshi_ob_records
+        ]
+
         # Kalshi live poll index (advances on each HTTP request)
         self._live_index = 0
+
+        # Kalshi WS replay position (persists across reconnects)
+        self._kalshi_ob_index = 0
+
+        # ── Synchronization ──
+        # The poller (HTTP) is the master clock.  Each poll sets _replay_ts
+        # to the current record's timestamp and notifies the WS handler via
+        # an asyncio.Event so it can send all OB records up to that time.
+        self._replay_ts: float = 0.0
+        self._ts_event: asyncio.Event | None = None  # created in start()
 
         # Server state
         self._live_app: web.Application | None = None
@@ -137,6 +159,8 @@ class ReplayServer:
         kalshi_ws_port: int = 8557,
     ) -> None:
         """Start mock HTTP + WS servers."""
+        self._ts_event = asyncio.Event()
+
         # Kalshi live data HTTP mock
         self._live_app = web.Application()
         self._live_app.router.add_get(
@@ -178,6 +202,10 @@ class ReplayServer:
 
     async def stop(self) -> None:
         """Stop all mock servers."""
+        # Unblock WS handler if it's waiting for a timestamp advance
+        if self._ts_event is not None:
+            self._replay_ts = float("inf")
+            self._ts_event.set()
         for runner in (self._live_runner, self._odds_ws_runner, self._kalshi_ws_runner):
             if runner is not None:
                 await runner.cleanup()
@@ -199,6 +227,9 @@ class ReplayServer:
 
         Sequential: each poll advances the index by 1. When exhausted,
         returns the last record (match finished state).
+
+        Also advances _replay_ts and signals the WS handler so orderbook
+        records up to this timestamp are delivered.
         """
         if self._live_index >= len(self.kalshi_live_records):
             if self.kalshi_live_records:
@@ -209,6 +240,11 @@ class ReplayServer:
             record = self.kalshi_live_records[self._live_index]
             self._live_index += 1
 
+        # Advance the master replay clock and wake the WS handler
+        self._replay_ts = _get_ts(record)
+        if self._ts_event is not None:
+            self._ts_event.set()
+
         response = _matchstate_to_api_response(_strip_ts(record))
         return web.json_response(response)
 
@@ -216,22 +252,34 @@ class ReplayServer:
 
     async def _serve_odds_ws(self, request: web.Request) -> web.WebSocketResponse:
         """Send odds updates via WS with timing from _ts_mono and speed."""
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(heartbeat=None)
         await ws.prepare(request)
         await ws.send_json({"type": "welcome"})
 
-        prev_ts = 0.0
-        for record in self.odds_api_records:
-            ts = _get_ts(record)
-            delay = (ts - prev_ts) / self.speed
-            if delay > 0:
-                await asyncio.sleep(delay)
-            prev_ts = ts
-
+        async def _drain_incoming() -> None:
             try:
-                await ws.send_json(_strip_ts(record))
-            except (ConnectionResetError, ConnectionError):
-                break
+                async for _ in ws:
+                    pass
+            except Exception:
+                pass
+
+        drain_task = asyncio.create_task(_drain_incoming())
+
+        try:
+            prev_ts = 0.0
+            for record in self.odds_api_records:
+                ts = _get_ts(record)
+                delay = (ts - prev_ts) / self.speed
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                prev_ts = ts
+
+                try:
+                    await ws.send_json(_strip_ts(record))
+                except (ConnectionResetError, ConnectionError):
+                    break
+        finally:
+            drain_task.cancel()
 
         await ws.close()
         return ws
@@ -239,24 +287,52 @@ class ReplayServer:
     # ── Kalshi orderbook (WS) ────────────────────────────────────
 
     async def _serve_kalshi_ws(self, request: web.Request) -> web.WebSocketResponse:
-        """Send Kalshi orderbook updates via WS with timing from _ts_mono and speed."""
-        ws = web.WebSocketResponse()
+        """Send Kalshi orderbook records gated by the poller's master clock.
+
+        Waits for _replay_ts to advance (set by each HTTP poll), then sends
+        all OB records whose timestamp is ≤ _replay_ts.  This guarantees the
+        orderbook is fully caught up before the next tick fires.
+
+        Resumes from ``_kalshi_ob_index`` across reconnects.
+        """
+        ws = web.WebSocketResponse(heartbeat=None)
         await ws.prepare(request)
         await ws.send_json({"type": "auth_response", "status": "ok"})
 
-        prev_ts = 0.0
-        for record in self.kalshi_ob_records:
-            ts = _get_ts(record)
-            if prev_ts > 0:
-                delay = (ts - prev_ts) / self.speed
-                if delay > 0:
-                    await asyncio.sleep(delay)
-            prev_ts = ts
-
+        async def _drain_incoming() -> None:
             try:
-                await ws.send_json(_strip_ts(record))
-            except ConnectionError:
-                break
+                async for _ in ws:
+                    pass
+            except Exception:
+                pass
+
+        drain_task = asyncio.create_task(_drain_incoming())
+        event = self._ts_event
+        assert event is not None
+
+        try:
+            records = self._kalshi_ob_prepared
+            total = len(records)
+
+            while self._kalshi_ob_index < total:
+                # Wait until the poller advances the clock
+                await event.wait()
+                event.clear()
+
+                current_ts = self._replay_ts
+
+                # Send all OB records up to the current replay timestamp
+                while self._kalshi_ob_index < total:
+                    ts, payload = records[self._kalshi_ob_index]
+                    if ts > current_ts:
+                        break
+                    self._kalshi_ob_index += 1
+                    try:
+                        await ws.send_str(payload)
+                    except (ConnectionResetError, ConnectionError):
+                        return ws
+        finally:
+            drain_task.cancel()
 
         await ws.close()
         return ws
@@ -264,3 +340,5 @@ class ReplayServer:
     def reset(self) -> None:
         """Reset replay state for re-running."""
         self._live_index = 0
+        self._kalshi_ob_index = 0
+        self._replay_ts = 0.0

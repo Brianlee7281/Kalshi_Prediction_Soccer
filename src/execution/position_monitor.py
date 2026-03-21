@@ -114,22 +114,25 @@ class PositionTracker:
             held = position.ticks_held
             decision = None
 
-            # Trigger 2 — EDGE_REVERSAL (checked before Trigger 1, ignores min_hold)
-            if position.direction == "BUY_YES" and p_model < p_k:
+            # Trigger 2 — EDGE_REVERSAL (ignores min_hold)
+            # Symmetric threshold: exit only when the edge has reversed by more
+            # than theta (the same dynamic threshold used for entry).  A mere
+            # zero-crossing is noise; we need the market to convincingly disagree.
+            if position.direction == "BUY_YES" and (p_k - p_model) > theta:
                 decision = ExitDecision(
                     position_id=position.id,
                     trigger=ExitTrigger.EDGE_REVERSAL,
                     contracts_to_exit=position.quantity,
                     exit_price=p_k,
-                    reason="edge_reversal: direction flipped",
+                    reason=f"edge_reversal: neg_edge={p_k - p_model:.4f} > theta={theta:.4f}",
                 )
-            elif position.direction == "BUY_NO" and p_model > p_k:
+            elif position.direction == "BUY_NO" and (p_model - p_k) > theta:
                 decision = ExitDecision(
                     position_id=position.id,
                     trigger=ExitTrigger.EDGE_REVERSAL,
                     contracts_to_exit=position.quantity,
                     exit_price=p_k,
-                    reason="edge_reversal: direction flipped",
+                    reason=f"edge_reversal: neg_edge={p_model - p_k:.4f} > theta={theta:.4f}",
                 )
 
             # Trigger 6 — EKF_DIVERGENCE (ignores min_hold, safety)

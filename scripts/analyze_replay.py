@@ -136,7 +136,7 @@ def main() -> None:
         print(f"  [!] P(Draw) = {p0['draw']:.4f} at kickoff (should be ~0.25) — mock params issue")
     sum_p = p0["home_win"] + p0["draw"] + p0["away_win"]
     print(f"  P(H)+P(D)+P(A) at kickoff = {sum_p:.4f} (should be 1.0)")
-    print(f"  NOTE: Using dummy parameters. Train real params for meaningful P_model values.")
+    print(f"  NOTE: Check params if P_model values seem unrealistic at kickoff.")
 
     # ── Plot ───────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(14, 6))

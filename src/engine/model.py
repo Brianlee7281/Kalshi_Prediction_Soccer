@@ -93,7 +93,7 @@ class LiveMatchModel:
     # Event tracking
     event_state: str = "IDLE"  # IDLE | PRELIMINARY | CONFIRMED
     cooldown: bool = False
-    cooldown_until_tick: int = 0
+    cooldown_until_t: float = 0.0  # match-time (minutes) when cooldown expires
     ob_freeze: bool = False
     _last_period: str = ""
     _last_score: tuple[int, int] = (0, 0)
@@ -295,9 +295,9 @@ class LiveMatchModel:
 
     @property
     def order_allowed(self) -> bool:
-        """Phase 3 decides 'can trade?', Phase 4 decides 'should trade?'."""
-        return (
-            not self.cooldown
-            and not self.ob_freeze
-            and self.event_state == "IDLE"
-        )
+        """Phase 3 decides 'can trade?', Phase 4 decides 'should trade?'.
+
+        ob_freeze remains (VAR/penalty — orderbook is genuinely unreliable).
+        Goal cooldown removed — post-goal repricing is where edges appear.
+        """
+        return not self.ob_freeze

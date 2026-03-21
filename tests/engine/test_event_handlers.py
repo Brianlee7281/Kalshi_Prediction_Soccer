@@ -58,14 +58,14 @@ def _make_test_model() -> LiveMatchModel:
 
 
 def test_handle_goal_updates_score() -> None:
-    """Goal updates score, delta_S, and sets cooldown."""
+    """Goal updates score, delta_S, and event_state."""
     model = _make_test_model()
     handle_goal(model, "home", 35)
     assert model.score == (1, 0)
     assert model.delta_S == 1
-    assert model.cooldown is True
-    assert model.cooldown_until_tick == 150  # 100 + 50
     assert model.event_state == "CONFIRMED"
+    # No cooldown — post-goal is when edges appear
+    assert model.cooldown is False
 
     # Second goal (away)
     handle_goal(model, "away", 40)
@@ -82,7 +82,7 @@ def test_handle_red_card_state_transition() -> None:
     handle_red_card(model, "home", 60)
     assert model.current_state_X == 1
     assert model.cooldown is True
-    assert model.cooldown_until_tick == 130  # 100 + 30
+    assert model.cooldown_until_t == 35.5  # t=35.0 + 0.5 minute
 
     # Away red from state 1: 1 → 3
     model.tick_count = 200

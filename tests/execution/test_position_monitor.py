@@ -150,15 +150,21 @@ def test_min_hold_respected():
 
 
 def test_edge_reversal_ignores_min_hold():
-    """EDGE_REVERSAL fires immediately even before min_hold."""
+    """EDGE_REVERSAL fires immediately even before min_hold.
+
+    Requires negative edge to exceed dynamic theta (symmetric threshold).
+    Use low EKF uncertainty + large reversal to guarantee theta < neg_edge.
+    """
     tracker = PositionTracker(min_hold_ticks=150)
     signal = _make_signal(direction="BUY_YES", p_model=0.62, p_kalshi=0.55)
     fill = _make_fill(price=0.55, quantity=10)
     pos = tracker.add_position(signal, fill, tick=0, t=10.0)
 
-    # After just 5 ticks, p_model < p_kalshi → reversal
-    p_kalshi = {"home_win": 0.60}
-    payload = _make_payload(home_win=0.50)  # p_model=0.50 < p_kalshi=0.60
+    # Large reversal with low uncertainty so neg_edge > theta
+    p_kalshi = {"home_win": 0.80}
+    payload = _make_payload(
+        home_win=0.20, ekf_P_H=0.01, mu_H=0.3,
+    )  # neg_edge = 0.60, theta ≈ 0.03
     for _ in range(4):
         tracker.check_exits(payload, p_kalshi)
 
@@ -369,9 +375,9 @@ def test_multiple_positions_independent():
     tracker.add_position(sig_away, fill_away, tick=0, t=10.0)
 
     # home_win: p_model=0.62 > p_kalshi=0.55 → no reversal, positive edge
-    # away_win: p_model=0.20 < p_kalshi=0.30 → EDGE_REVERSAL
-    payload = _make_payload(home_win=0.62, away_win=0.20)
-    p_kalshi = {"home_win": 0.55, "away_win": 0.30}
+    # away_win: p_model=0.05 vs p_kalshi=0.60 → large EDGE_REVERSAL
+    payload = _make_payload(home_win=0.62, away_win=0.05, ekf_P_A=0.01, mu_A=0.3)
+    p_kalshi = {"home_win": 0.55, "away_win": 0.60}
 
     decisions = tracker.check_exits(payload, p_kalshi)
     assert len(decisions) == 1
@@ -385,9 +391,9 @@ def test_exits_evaluated_when_order_not_allowed():
     fill = _make_fill(price=0.55, quantity=10)
     tracker.add_position(signal, fill, tick=0, t=10.0)
 
-    # order_allowed=False, but edge reversed → still gets exit
-    payload = _make_payload(order_allowed=False, home_win=0.40)
-    p_kalshi = {"home_win": 0.55}
+    # order_allowed=False, but edge reversed by large amount → still gets exit
+    payload = _make_payload(order_allowed=False, home_win=0.10, ekf_P_H=0.01, mu_H=0.3)
+    p_kalshi = {"home_win": 0.70}
 
     decisions = tracker.check_exits(payload, p_kalshi)
     assert len(decisions) == 1
@@ -412,8 +418,8 @@ def test_production_params_no_early_exit():
         decisions = tracker.check_exits(payload, p_kalshi)
         assert len(decisions) == 0
 
-    # At tick 150 with reversed edge → EDGE_REVERSAL fires
-    reversed_payload = _make_payload(home_win=0.40)
+    # At tick 150 with large reversed edge + low uncertainty → EDGE_REVERSAL fires
+    reversed_payload = _make_payload(home_win=0.10, ekf_P_H=0.01, mu_H=0.3)
     decisions = tracker.check_exits(reversed_payload, p_kalshi)
     assert len(decisions) == 1
     assert decisions[0].trigger == ExitTrigger.EDGE_REVERSAL
