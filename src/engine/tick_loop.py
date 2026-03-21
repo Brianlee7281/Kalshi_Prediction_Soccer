@@ -35,8 +35,14 @@ async def tick_loop(
     model: LiveMatchModel,
     phase4_queue: asyncio.Queue | None = None,
     redis_client: object | None = None,
+    tick_interval: float = 1.0,
 ) -> None:
-    """Main tick loop — v5 7-step pipeline every 1 second."""
+    """Main tick loop — v5 7-step pipeline every tick_interval seconds.
+
+    Args:
+        tick_interval: Seconds between ticks. Default 1.0 for live.
+                       Use 0.0 for replay (runs as fast as MC allows).
+    """
     start_time = time.monotonic()
 
     while model.engine_phase != "FINISHED":
@@ -49,13 +55,15 @@ async def tick_loop(
 
         # Skip pricing during inactive phases
         if model.engine_phase in ("WAITING_FOR_KICKOFF", "HALFTIME"):
-            await _sleep_until_next_tick(start_time, model.tick_count)
+            await _sleep_until_next_tick(start_time, model.tick_count, interval=tick_interval)
             continue
 
         # ── v5 7-step pipeline ──────────────────────────────
 
         # Step 1: Update effective match time
-        model.update_time()
+        # In replay mode (tick_interval=0), poller drives model.t directly
+        if tick_interval > 0:
+            model.update_time()
 
         # Step 2: EKF prediction step
         if model.ekf_tracker is not None:
@@ -120,7 +128,7 @@ async def tick_loop(
             order_allowed=model.order_allowed,
         )
 
-        await _sleep_until_next_tick(start_time, model.tick_count)
+        await _sleep_until_next_tick(start_time, model.tick_count, interval=tick_interval)
 
     logger.info("tick_loop_finished", match_id=model.match_id, ticks=model.tick_count)
 
@@ -145,7 +153,14 @@ async def _sleep_until_next_tick(
     tick_count: int,
     interval: float = 1.0,
 ) -> None:
-    """Sleep until next absolute tick time. Skip if already past."""
+    """Sleep until next absolute tick time. Skip if already past.
+
+    When interval is 0 (replay mode), yields control without sleeping
+    so other coroutines (poller, WS listeners) can run.
+    """
+    if interval <= 0:
+        await asyncio.sleep(0)  # yield to event loop
+        return
     next_tick_time = start_time + tick_count * interval
     sleep_duration = next_tick_time - time.monotonic()
     if sleep_duration > 0:

@@ -29,12 +29,26 @@ class MatchState(BaseModel):
 
 
 class KalshiLiveDataClient:
-    """Kalshi live data client for soccer match state via signed REST calls."""
+    """Kalshi live data client for soccer match state via signed REST calls.
 
-    def __init__(self, api_key: str, private_key_path: str) -> None:
+    For replay mode, pass base_url to point at a local ReplayServer
+    and omit api_key/private_key_path (auth is skipped).
+    """
+
+    def __init__(
+        self,
+        api_key: str = "",
+        private_key_path: str = "",
+        base_url: str | None = None,
+    ) -> None:
         self._api_key = api_key
-        self._private_key = self._load_private_key(private_key_path)
-        self._client = httpx.AsyncClient(base_url=KALSHI_BASE_URL)
+        self._base_url = base_url or KALSHI_BASE_URL
+        self._private_key = (
+            self._load_private_key(private_key_path)
+            if private_key_path
+            else None
+        )
+        self._client = httpx.AsyncClient(base_url=self._base_url)
 
     @staticmethod
     def _load_private_key(path: str):
@@ -44,11 +58,10 @@ class KalshiLiveDataClient:
     def _sign_request(self, method: str, path: str) -> dict[str, str]:
         """Generate RSA-PSS SHA-256 auth headers.
 
-        Returns dict with KALSHI-ACCESS-KEY, KALSHI-ACCESS-TIMESTAMP,
-        KALSHI-ACCESS-SIGNATURE.
-        Padding: PSS(mgf=MGF1(SHA256), salt_length=MAX_LENGTH).
-        Signature = base64(sign(timestamp_ms + METHOD + path))
+        Returns empty dict in replay mode (no private key loaded).
         """
+        if self._private_key is None:
+            return {}
         timestamp_ms = str(int(time.time() * 1000))
         message = (timestamp_ms + method.upper() + path).encode()
         signature = base64.b64encode(

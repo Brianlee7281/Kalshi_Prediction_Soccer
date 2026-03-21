@@ -32,6 +32,9 @@ class KalshiWSClient:
     Connects to Kalshi streaming API, authenticates via RSA-PSS,
     subscribes to orderbook channels for specified tickers.
 
+    For replay mode, pass ws_url to point at a local ReplayServer
+    and omit api_key/private_key_path (auth is skipped).
+
     Usage:
         client = KalshiWSClient(api_key="...", private_key_path="keys/kalshi_private.pem")
         await client.connect(
@@ -43,9 +46,19 @@ class KalshiWSClient:
         await client.disconnect()
     """
 
-    def __init__(self, api_key: str, private_key_path: str) -> None:
+    def __init__(
+        self,
+        api_key: str = "",
+        private_key_path: str = "",
+        ws_url: str | None = None,
+    ) -> None:
         self._api_key = api_key
-        self._private_key = self._load_private_key(private_key_path)
+        self._ws_url = ws_url or KALSHI_WS_URL
+        self._private_key = (
+            self._load_private_key(private_key_path)
+            if private_key_path
+            else None
+        )
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._stop = asyncio.Event()
         self._connected = False
@@ -56,12 +69,13 @@ class KalshiWSClient:
         with open(path, "rb") as f:
             return serialization.load_pem_private_key(f.read(), password=None)
 
-    def _sign_ws_auth(self) -> dict[str, str]:
+    def _sign_ws_auth(self) -> dict[str, str] | None:
         """Generate RSA-PSS SHA-256 auth message for WS handshake.
 
-        Same signing algorithm as REST client (src/clients/kalshi.py).
-        Returns dict with api_key, timestamp, and signature.
+        Returns None in replay mode (no private key loaded).
         """
+        if self._private_key is None:
+            return None
         timestamp_ms = str(int(time.time() * 1000))
         # For WS auth, sign: timestamp + GET + /trade-api/ws/v2
         message = (timestamp_ms + "GET" + "/trade-api/ws/v2").encode()
@@ -109,16 +123,17 @@ class KalshiWSClient:
         while not self._stop.is_set():
             try:
                 async with websockets.connect(
-                    KALSHI_WS_URL, max_size=10_000_000
+                    self._ws_url, max_size=10_000_000
                 ) as ws:
                     self._ws = ws
                     self._connected = True
                     attempt = 0
-                    log.info("kalshi_ws_connected")
+                    log.info("kalshi_ws_connected", url=self._ws_url)
 
-                    # Authenticate
+                    # Authenticate (skipped in replay mode)
                     auth_msg = self._sign_ws_auth()
-                    await ws.send(json.dumps(auth_msg))
+                    if auth_msg is not None:
+                        await ws.send(json.dumps(auth_msg))
 
                     # Wait for auth response
                     auth_resp = json.loads(await ws.recv())

@@ -2,12 +2,12 @@
 
 Directory structure (Pattern 7):
     data/recordings/{match_id}/
-        odds_api.jsonl      # raw WS messages
-        kalshi_ob.jsonl     # orderbook snapshots + deltas
-        goalserve.jsonl     # poll responses
-        ticks.jsonl         # TickPayload snapshots
-        events.jsonl        # detected events
-        metadata.json       # match info, start/end times
+        odds_api.jsonl          # raw WS messages
+        kalshi_ob.jsonl         # orderbook snapshots + deltas
+        kalshi_live_data.jsonl  # Kalshi live data poll responses
+        ticks.jsonl             # TickPayload snapshots
+        events.jsonl            # detected events
+        metadata.json           # match info, start/end times
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ logger = get_logger("recorder")
 _FLUSH_EVERY_N = 10
 _FLUSH_EVERY_S = 5.0
 
-_STREAM_NAMES = ("odds_api", "kalshi_ob", "goalserve", "ticks", "events", "kalshi_live_data")
+_STREAM_NAMES = ("odds_api", "kalshi_ob", "ticks", "events", "kalshi_live_data")
 
 
 class MatchRecorder:
@@ -82,10 +82,6 @@ class MatchRecorder:
     def record_kalshi_ob(self, data: dict) -> None:
         """Append Kalshi orderbook data with _ts."""
         self._write("kalshi_ob", data)
-
-    def record_goalserve(self, response: dict) -> None:
-        """Append Goalserve poll response with _ts."""
-        self._write("goalserve", response)
 
     def record_tick(self, payload: TickPayload) -> None:
         """Append tick snapshot with _ts."""

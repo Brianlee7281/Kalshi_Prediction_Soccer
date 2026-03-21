@@ -2,8 +2,8 @@
 
 Usage:
   PYTHONPATH=. python scripts/run_phase3.py --match-id 12345 --league EPL          # live
-  PYTHONPATH=. python scripts/run_phase3.py --replay data/recordings/match_12345   # replay
-  PYTHONPATH=. python scripts/run_phase3.py --replay data/recordings/match_12345 --speed 10  # 10x
+  PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN        # replay
+  PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN --speed 10  # 10x
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from src.common.types import Phase2Result
 from src.engine.kalshi_live_poller import kalshi_live_poller
 from src.engine.model import LiveMatchModel
 from src.engine.odds_api_listener import odds_api_listener
-from src.engine.odds_consensus import OddsConsensus
 from src.engine.tick_loop import tick_loop
 from src.recorder.recorder import MatchRecorder
 
@@ -67,7 +66,7 @@ def _make_mock_model(match_id: str) -> LiveMatchModel:
             [0.00, 0.00, -0.01, 0.01],
             [0.00, 0.00, 0.00, 0.00],
         ],
-        "b": [0.1, 0.15, 0.12, 0.08, 0.10, -0.05],
+        "b": [0.1, 0.15, 0.12, 0.08, 0.10, -0.05, 0.05, 0.0],
         "gamma_H": [0.0, -0.15, 0.10, -0.05],
         "gamma_A": [0.0, 0.10, -0.15, -0.05],
         "delta_H": [-0.10, -0.05, 0.0, 0.05, 0.10],
@@ -80,7 +79,6 @@ def _make_mock_model(match_id: str) -> LiveMatchModel:
 async def run_live(match_id: str, league: str) -> None:
     """Run Phase 3 against live data sources."""
     model = _make_mock_model(match_id)
-    model.odds_consensus = OddsConsensus()
     recorder = MatchRecorder(match_id)
     model.recorder = recorder  # type: ignore[attr-defined]
 
@@ -99,31 +97,48 @@ async def run_live(match_id: str, league: str) -> None:
 
 async def run_replay(replay_dir: Path, speed: float) -> None:
     """Run Phase 3 against replayed recorded data."""
+    from src.clients.kalshi_live_data import KalshiLiveDataClient
+    from src.clients.kalshi_ws import KalshiWSClient
+    from src.engine.kalshi_ob_sync import kalshi_ob_sync
     from src.recorder.replay_server import ReplayServer
 
     metadata = _load_replay_metadata(replay_dir)
-    match_id = metadata.get("match_id", replay_dir.name)
+    match_id = metadata.get("event_ticker", metadata.get("match_id", replay_dir.name))
 
     model = _make_mock_model(match_id)
-    model.odds_consensus = OddsConsensus()
     # Start in FIRST_HALF for replay (skip waiting for kickoff)
     model.engine_phase = "FIRST_HALF"
 
     server = ReplayServer(replay_dir, speed=speed)
     await server.start()
 
+    # Create replay-mode clients pointing at localhost (no auth needed)
+    live_client = KalshiLiveDataClient(
+        base_url=f"http://127.0.0.1:{server.kalshi_live_port}",
+    )
+    ws_client = KalshiWSClient(
+        ws_url=f"ws://127.0.0.1:{server.kalshi_ws_port}/ws",
+    )
+
     log.info(
         "phase3_replay_start",
         match_id=match_id,
         speed=speed,
-        goalserve_port=server.goalserve_port,
+        kalshi_live_port=server.kalshi_live_port,
         odds_ws_port=server.odds_ws_port,
+        kalshi_ws_port=server.kalshi_ws_port,
     )
 
     try:
         phase4_queue: asyncio.Queue = asyncio.Queue()
-        await tick_loop(model, phase4_queue=phase4_queue)
+        await asyncio.gather(
+            tick_loop(model, phase4_queue=phase4_queue, tick_interval=0.0),
+            kalshi_live_poller(model, client=live_client, poll_interval=1.0 / speed, replay_mode=True),
+            kalshi_ob_sync(model, ws_client=ws_client),
+            odds_api_listener(model),
+        )
     finally:
+        await live_client.close()
         await server.stop()
         log.info(
             "phase3_replay_done",

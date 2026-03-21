@@ -60,9 +60,9 @@ Running containers keep their param_version for the ENTIRE match.
 
 All live data saved to JSONL with `_ts` (our system clock):
 ```
-recordings/{match_id}/odds_api.jsonl    # raw WS messages
-recordings/{match_id}/kalshi_ob.jsonl   # orderbook snapshot + delta
-recordings/{match_id}/goalserve.jsonl   # poll responses
+recordings/{match_id}/odds_api.jsonl          # raw WS messages
+recordings/{match_id}/kalshi_ob.jsonl         # orderbook snapshot + delta
+recordings/{match_id}/kalshi_live_data.jsonl  # Kalshi live data poll responses
 ```
 
 ReplayServer reads these files and replays as mock WS/HTTP. All development after Sprint 3 uses ReplayServer.

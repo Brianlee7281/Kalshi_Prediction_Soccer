@@ -12,13 +12,13 @@ def test_recorder_creates_files(tmp_path: Path) -> None:
     """Recording creates JSONL files and metadata.json on finalize."""
     rec = MatchRecorder("test_match", base_dir=tmp_path)
     rec.record_odds_api({"type": "updated", "bookie": "Bet365"})
-    rec.record_goalserve({"score": "1-0"})
+    rec.record_kalshi_live_data({"status": "live", "half": "1st", "minute": 10})
     rec.record_event({"type": "goal", "team": "home", "minute": 35})
     rec.finalize()
 
     match_dir = tmp_path / "test_match"
     assert (match_dir / "odds_api.jsonl").exists()
-    assert (match_dir / "goalserve.jsonl").exists()
+    assert (match_dir / "kalshi_live_data.jsonl").exists()
     assert (match_dir / "events.jsonl").exists()
     assert (match_dir / "metadata.json").exists()
 
@@ -27,7 +27,7 @@ def test_recorder_creates_files(tmp_path: Path) -> None:
         meta = json.load(f)
     assert meta["match_id"] == "test_match"
     assert meta["record_counts"]["odds_api"] == 1
-    assert meta["record_counts"]["goalserve"] == 1
+    assert meta["record_counts"]["kalshi_live_data"] == 1
     assert meta["record_counts"]["events"] == 1
     assert meta["duration_s"] >= 0
 

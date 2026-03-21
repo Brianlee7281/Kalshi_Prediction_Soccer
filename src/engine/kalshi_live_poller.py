@@ -27,16 +27,28 @@ logger = get_logger("engine.kalshi_live_poller")
 _POLL_INTERVAL_S = 1.0  # well within Basic tier 20 reads/s
 
 
-async def kalshi_live_poller(model: LiveMatchModel) -> None:
-    """Coroutine: poll Kalshi live data every 1s, detect events, update model state.
+async def kalshi_live_poller(
+    model: LiveMatchModel,
+    client: KalshiLiveDataClient | None = None,
+    poll_interval: float = _POLL_INTERVAL_S,
+    replay_mode: bool = False,
+) -> None:
+    """Coroutine: poll Kalshi live data every poll_interval seconds.
 
     Runs until model.engine_phase == "FINISHED".
     Records all poll responses to JSONL if recorder is attached.
-    """
-    api_key = os.environ["KALSHI_API_KEY"]
-    private_key_path = os.environ["KALSHI_PRIVATE_KEY_PATH"]
 
-    client = KalshiLiveDataClient(api_key=api_key, private_key_path=private_key_path)
+    Args:
+        model: Shared live match state.
+        client: Optional pre-configured client (for replay mode).
+                If None, creates a live client from env vars.
+        poll_interval: Seconds between polls (default 1.0, use 1.0/speed for replay).
+        replay_mode: If True, drives model.t from replay data instead of wall clock.
+    """
+    if client is None:
+        api_key = os.environ["KALSHI_API_KEY"]
+        private_key_path = os.environ["KALSHI_PRIVATE_KEY_PATH"]
+        client = KalshiLiveDataClient(api_key=api_key, private_key_path=private_key_path)
 
     try:
         milestone_uuid = await client.resolve_milestone_uuid(model.kalshi_event_ticker)
@@ -58,7 +70,7 @@ async def kalshi_live_poller(model: LiveMatchModel) -> None:
 
     try:
         while model.engine_phase != "FINISHED":
-            next_tick += _POLL_INTERVAL_S
+            next_tick += poll_interval
 
             try:
                 state = await asyncio.wait_for(
@@ -91,6 +103,10 @@ async def kalshi_live_poller(model: LiveMatchModel) -> None:
                 first_poll = False
             if first_poll and state.half in ("HT", "FT"):
                 first_poll = False
+
+            # Replay mode: drive model.t from replay data (not wall clock)
+            if replay_mode and state.status == "live":
+                model.t = float(state.minute + state.stoppage)
 
             # Event detection and dispatch
             events = _detect_events_from_state(model, state)
