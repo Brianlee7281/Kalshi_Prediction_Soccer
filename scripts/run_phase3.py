@@ -6,6 +6,7 @@ Usage:
   PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN --speed 10  # 10x
   PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN --trade # paper trade
   PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN --trade --bankroll 5000
+  PYTHONPATH=. python scripts/run_phase3.py --tick-replay data/recordings/KXEPLGAME-26MAR20BOUMUN --bankroll 5000
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.calibration.step_1_3_ml_prior import compute_C_time
-from src.common.types import MarketProbs, MatchPnL, Phase2Result, TradingMode
+from src.common.types import MarketProbs, MatchPnL, Phase2Result, TickPayload, TradingMode
 from src.engine.kalshi_live_poller import kalshi_live_poller
 from src.engine.model import LiveMatchModel
 from src.engine.odds_api_listener import odds_api_listener
@@ -108,9 +109,16 @@ async def _load_params_from_db(league_id: int) -> dict | None:
         "gamma_A": _parse(row["gamma_a"]),
         "delta_H": _parse(row["delta_h"]),
         "delta_A": _parse(row["delta_a"]),
-        "sigma_omega_sq": float(row["sigma_omega_sq"]) if row["sigma_omega_sq"] is not None else 0.01,
-        "eta_h": float(row["eta_h"]) if row["eta_h"] is not None else 1.0,
-        "eta_a": float(row["eta_a"]) if row["eta_a"] is not None else 1.0,
+        "sigma_a": float(row["sigma_a"]) if row.get("sigma_a") is not None else 0.5,
+        "sigma_omega_sq": float(row["sigma_omega_sq"]) if row["sigma_omega_sq"] is not None else 0.003,
+        "eta_H": float(row["eta_h"]) if row["eta_h"] is not None else 0.0,
+        "eta_A": float(row["eta_a"]) if row["eta_a"] is not None else 0.0,
+        "eta_H2": float(row["eta_h2"]) if row.get("eta_h2") is not None else 0.0,
+        "eta_A2": float(row["eta_a2"]) if row.get("eta_a2") is not None else 0.0,
+        "delta_H_pos": _parse(row["delta_h_pos"]) if row.get("delta_h_pos") else None,
+        "delta_H_neg": _parse(row["delta_h_neg"]) if row.get("delta_h_neg") else None,
+        "delta_A_pos": _parse(row["delta_a_pos"]) if row.get("delta_a_pos") else None,
+        "delta_A_neg": _parse(row["delta_a_neg"]) if row.get("delta_a_neg") else None,
         "alpha_1": 2.0,  # not stored in DB, use default
     }
     log.info(
@@ -229,6 +237,12 @@ _FALLBACK_PARAMS = {
     "gamma_A": [0.0, 0.10, -0.15, -0.05],
     "delta_H": [-0.10, -0.05, 0.0, 0.05, 0.10],
     "delta_A": [0.10, 0.05, 0.0, -0.05, -0.10],
+    "sigma_a": 0.5,
+    "sigma_omega_sq": 0.003,
+    "eta_H": 0.0,
+    "eta_A": 0.0,
+    "eta_H2": 0.0,
+    "eta_A2": 0.0,
     "alpha_1": 2.0,
 }
 
@@ -274,20 +288,92 @@ def _make_mock_model(
 
 
 async def run_live(match_id: str, league: str) -> None:
-    """Run Phase 3 against live data sources."""
-    model = _make_mock_model(match_id)
+    """Run Phase 3 against live data sources.
+
+    Connects to Kalshi live data (HTTP polling) and Kalshi WS (orderbook).
+    Records all data streams to data/recordings/{match_id}/ for later
+    tick-replay backtesting.
+    """
+    from src.clients.kalshi import KalshiClient
+    from src.clients.kalshi_live_data import KalshiLiveDataClient
+    from src.clients.kalshi_ws import KalshiWSClient
+    from src.engine.kalshi_ob_sync import kalshi_ob_sync
+
+    league_id = LEAGUE_IDS.get(league, 1)
+    db_params = await _load_params_from_db(league_id)
+    if db_params is None:
+        log.warning("using_fallback_params", league=league, league_id=league_id)
+
+    # Resolve Kalshi tickers from the event ticker via REST API
+    api_key = os.environ.get("KALSHI_API_KEY", "")
+    private_key_path = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+    kalshi_rest = KalshiClient(api_key=api_key, private_key_path=private_key_path)
+
+    # Series ticker = event ticker prefix (e.g. "KXEPLGAME" from "KXEPLGAME-26MAR20BOUMUN")
+    series_ticker = match_id.split("-")[0] if "-" in match_id else match_id
+    markets = await kalshi_rest.get_markets(series_ticker=series_ticker)
+    tickers_list = [m["ticker"] for m in markets if m.get("event_ticker") == match_id]
+    kalshi_tickers = _tickers_list_to_dict(match_id, tickers_list) if tickers_list else {}
+
+    live_client = KalshiLiveDataClient()
+
+    if not kalshi_tickers:
+        log.error("no_kalshi_tickers", match_id=match_id)
+        await live_client.close()
+        return
+
+    # Backsolve intensities from live pre-match orderbook
+    backsolve_kwargs: dict = {}
+    use_params = db_params or _FALLBACK_PARAMS
+    # TODO: extract pre-match odds from live orderbook (like _extract_kalshi_prematch_odds for recordings)
+
+    home_team = match_id  # placeholder — live mode doesn't have team names yet
+    away_team = match_id
+
+    model = _make_mock_model(
+        match_id,
+        kalshi_tickers=kalshi_tickers,
+        params=db_params,
+        league_id=league_id,
+        home_team=home_team,
+        away_team=away_team,
+        **backsolve_kwargs,
+    )
+    model.kalshi_event_ticker = match_id
+
     recorder = MatchRecorder(match_id)
     model.recorder = recorder  # type: ignore[attr-defined]
 
-    log.info("phase3_live_start", match_id=match_id, league=league)
+    # Kalshi WS client for orderbook sync (populates model.p_kalshi)
+    ws_client = KalshiWSClient(
+        api_key=os.environ.get("KALSHI_API_KEY", ""),
+        private_key_path=os.environ.get("KALSHI_PRIVATE_KEY_PATH", ""),
+    )
+
+    log.info(
+        "phase3_live_start",
+        match_id=match_id,
+        league=league,
+        tickers=kalshi_tickers,
+    )
 
     try:
-        await asyncio.gather(
-            tick_loop(model),
-            odds_api_listener(model),
-            kalshi_live_poller(model),
+        tick_task = asyncio.create_task(tick_loop(model))
+        poller_task = asyncio.create_task(
+            kalshi_live_poller(model, client=live_client)
         )
+        ob_task = asyncio.create_task(kalshi_ob_sync(model, ws_client=ws_client))
+        odds_task = asyncio.create_task(odds_api_listener(model))
+
+        await tick_task
+
+        for task in (poller_task, ob_task, odds_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(poller_task, ob_task, odds_task, return_exceptions=True)
     finally:
+        await ws_client.disconnect()
+        await live_client.close()
         recorder.finalize()
         log.info("phase3_live_done", match_id=match_id, ticks=model.tick_count)
 
@@ -425,18 +511,9 @@ async def run_replay(
         if exec_task is not None:
             # tick_loop exits without putting a FINISHED payload on the queue,
             # so we inject one to unblock execution_loop's settlement path.
-            from src.common.types import TickPayload
-            _zero_probs = MarketProbs(home_win=0.0, draw=0.0, away_win=0.0)
-            finished_payload = TickPayload(
-                match_id=model.match_id, t=model.t, engine_phase="FINISHED",
-                P_model=_zero_probs, sigma_MC=_zero_probs,
-                score=tuple(model.score), X=0, delta_S=0,
-                mu_H=0.0, mu_A=0.0, a_H_current=0.0, a_A_current=0.0,
-                ekf_P_H=0.0, ekf_P_A=0.0, hmm_state=0, dom_index=0.0,
-                surprise_score=0.0, order_allowed=False, cooldown=False,
-                ob_freeze=False, event_state="none",
+            await phase4_queue.put(
+                _make_finished_sentinel(model.match_id, model.t, tuple(model.score))
             )
-            await phase4_queue.put(finished_payload)
             match_pnl_result = await exec_task
 
         # Cancel remaining WS coroutines (they may block on recv)
@@ -461,6 +538,143 @@ async def run_replay(
             final_score=model.score,
             output_dir=str(output_dir / match_id),
         )
+
+
+def _make_finished_sentinel(match_id: str, t: float, score: tuple[int, int]) -> TickPayload:
+    """Build a FINISHED TickPayload sentinel for execution_loop settlement."""
+    _zero = MarketProbs(home_win=0.0, draw=0.0, away_win=0.0)
+    return TickPayload(
+        match_id=match_id, t=t, engine_phase="FINISHED",
+        P_model=_zero, sigma_MC=_zero,
+        score=score, X=0, delta_S=0,
+        mu_H=0.0, mu_A=0.0, a_H_current=0.0, a_A_current=0.0,
+        ekf_P_H=0.0, ekf_P_A=0.0, hmm_state=0, dom_index=0.0,
+        surprise_score=0.0, order_allowed=False, cooldown=False,
+        ob_freeze=False, event_state="none",
+    )
+
+
+async def run_tick_replay(
+    recording_dir: Path,
+    *,
+    bankroll: float = 10_000.0,
+    speed: float = 0.0,
+) -> None:
+    """Run Phase 4 paper trading by replaying recorded ticks directly.
+
+    Reads ticks.jsonl (TickPayload + p_kalshi) and feeds execution_loop.
+    No Phase 3 recomputation — uses exact recorded P_model, EKF state, etc.
+
+    Args:
+        recording_dir: Path containing ticks.jsonl and metadata.json.
+        bankroll: Starting paper bankroll.
+        speed: Replay pacing. 0 = instant (no sleep), 1 = real-time,
+               10 = 10x speed. Based on _ts spacing between ticks.
+    """
+    metadata = _load_replay_metadata(recording_dir)
+    match_id = metadata.get("event_ticker", metadata.get("match_id", recording_dir.name))
+
+    ticks_path = recording_dir / "ticks.jsonl"
+    if not ticks_path.exists():
+        log.error("ticks_file_not_found", path=str(ticks_path))
+        sys.exit(1)
+
+    # Resolve kalshi_tickers — check metadata, then derive from first tick's p_kalshi
+    raw_tickers = metadata.get("kalshi_tickers", [])
+    if isinstance(raw_tickers, dict):
+        kalshi_tickers = raw_tickers
+    elif raw_tickers:
+        kalshi_tickers = _tickers_list_to_dict(match_id, raw_tickers)
+    else:
+        # Derive tickers from the first tick's p_kalshi keys + event ticker pattern
+        kalshi_tickers = {}
+        with open(ticks_path, encoding="utf-8") as f:
+            first_tick = json.loads(f.readline())
+            p_kalshi_keys = list(first_tick.get("p_kalshi", {}).keys())
+            if p_kalshi_keys:
+                # Extract team abbrs: KXEPLGAME-26MAR20BOUMUN → BOU, MUN
+                parts = match_id.split("-")
+                match_abbr = parts[-1] if parts else ""
+                home_abbr = match_abbr[-6:-3].upper()
+                away_abbr = match_abbr[-3:].upper()
+                abbr_map = {
+                    "home_win": home_abbr,
+                    "away_win": away_abbr,
+                    "draw": "TIE",
+                }
+                for market_type in p_kalshi_keys:
+                    suffix = abbr_map.get(market_type)
+                    if suffix:
+                        kalshi_tickers[market_type] = f"{match_id}-{suffix}"
+
+    home_team = metadata.get("home_team", "HomeTeam")
+    away_team = metadata.get("away_team", "AwayTeam")
+
+    log.info(
+        "tick_replay_start",
+        match_id=match_id,
+        ticks_path=str(ticks_path),
+        bankroll=bankroll,
+        speed=speed,
+        tickers=kalshi_tickers,
+    )
+
+    # Minimal model — execution_loop only reads p_kalshi, kalshi_tickers, match_id
+    model = _make_mock_model(match_id, kalshi_tickers=kalshi_tickers)
+    db_pool = MockDBPool(initial_bankroll=bankroll)
+    phase4_queue: asyncio.Queue = asyncio.Queue()
+
+    exec_task = asyncio.create_task(
+        execution_loop(phase4_queue, model, db_pool, TradingMode.PAPER)
+    )
+
+    last_score: tuple[int, int] = (0, 0)
+    last_t: float = 0.0
+    prev_ts: float | None = None
+    tick_count = 0
+
+    with open(ticks_path, encoding="utf-8") as f:
+        for line in f:
+            record = json.loads(line)
+
+            # Extract and set p_kalshi on model before queueing the tick
+            p_kalshi = record.pop("p_kalshi", {})
+            model.p_kalshi = p_kalshi
+
+            # Pacing: sleep based on _ts spacing between ticks
+            ts = record.pop("_ts", None)
+            if speed > 0 and ts is not None and prev_ts is not None:
+                delay = (ts - prev_ts) / speed
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            prev_ts = ts
+
+            # score comes as list from JSON, TickPayload expects tuple
+            if "score" in record and isinstance(record["score"], list):
+                record["score"] = tuple(record["score"])
+
+            payload = TickPayload(**record)
+            last_score = payload.score
+            last_t = payload.t
+            tick_count += 1
+
+            await phase4_queue.put(payload)
+
+    # Inject FINISHED sentinel so execution_loop settles
+    await phase4_queue.put(_make_finished_sentinel(match_id, last_t, last_score))
+    match_pnl = await exec_task
+
+    # Save and display results
+    output_dir = Path("data/replay_results")
+    _save_trade_results(output_dir / match_id, match_pnl, db_pool)
+    _print_trade_summary(match_pnl, db_pool, bankroll, home_team, away_team)
+
+    log.info(
+        "tick_replay_done",
+        match_id=match_id,
+        ticks=tick_count,
+        final_score=list(last_score),
+    )
 
 
 def _save_trade_results(
@@ -553,14 +767,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Phase 3 engine")
     parser.add_argument("--match-id", type=str, help="Live match ID")
     parser.add_argument("--league", type=str, help="League code (e.g. EPL)")
-    parser.add_argument("--replay", type=str, help="Path to recording directory")
-    parser.add_argument("--speed", type=float, default=1.0, help="Replay speed multiplier")
+    parser.add_argument("--replay", type=str, help="Path to recording directory (full Phase 3 re-sim)")
+    parser.add_argument("--tick-replay", type=str,
+                        help="Path to recording directory with ticks.jsonl (direct tick replay, no Phase 3)")
+    parser.add_argument("--speed", type=float, default=1.0, help="Replay speed multiplier (0 = instant)")
     parser.add_argument("--trade", action="store_true", help="Enable Phase 4 paper trading")
     parser.add_argument("--bankroll", type=float, default=10_000.0,
                         help="Starting bankroll for paper trading (default: $10,000)")
     args = parser.parse_args()
 
-    if args.replay:
+    if args.tick_replay:
+        asyncio.run(run_tick_replay(
+            Path(args.tick_replay),
+            bankroll=args.bankroll,
+            speed=args.speed if args.speed != 1.0 else 0.0,
+        ))
+    elif args.replay:
         asyncio.run(run_replay(
             Path(args.replay), args.speed,
             trade=args.trade, bankroll=args.bankroll,
@@ -568,7 +790,7 @@ def main() -> None:
     elif args.match_id and args.league:
         asyncio.run(run_live(args.match_id, args.league))
     else:
-        parser.error("Provide --replay or both --match-id and --league")
+        parser.error("Provide --tick-replay, --replay, or both --match-id and --league")
 
 
 if __name__ == "__main__":

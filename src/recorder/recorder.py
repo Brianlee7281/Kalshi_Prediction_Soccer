@@ -83,9 +83,14 @@ class MatchRecorder:
         """Append Kalshi orderbook data with _ts."""
         self._write("kalshi_ob", data)
 
-    def record_tick(self, payload: TickPayload) -> None:
-        """Append tick snapshot with _ts."""
-        self._write("ticks", payload.model_dump())
+    def record_tick(
+        self, payload: TickPayload, p_kalshi: dict[str, float] | None = None
+    ) -> None:
+        """Append tick snapshot with _ts and optional p_kalshi."""
+        data = payload.model_dump()
+        if p_kalshi:
+            data["p_kalshi"] = dict(p_kalshi)
+        self._write("ticks", data)
 
     def record_event(self, event: dict) -> None:
         """Append detected event with _ts."""

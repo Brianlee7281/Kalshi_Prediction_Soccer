@@ -28,7 +28,7 @@ from src.execution.config import CONFIG
 from src.execution.db_positions import close_position_db, save_position
 from src.execution.exposure_manager import ExposureManager
 from src.execution.kelly_sizer import size_position
-from src.execution.order_manager import OrderManager
+from src.execution.order_manager import OrderManager, paper_fill_adjust
 from src.execution.pnl_calculator import compute_unrealized_pnl
 from src.execution.position_monitor import PositionTracker
 from src.execution.redis_publisher import publish_position_update, publish_signal
@@ -62,15 +62,24 @@ def _build_exit_signal(pos: Position, exit_decision: ExitDecision) -> Signal:
 def _paper_exit_fill(
     pos: Position, exit_price: float, contracts: int
 ) -> FillResult:
-    """Simulate a paper exit fill."""
+    """Simulate a paper exit fill with spread + depth adjustment.
+
+    Exit spread direction is adverse (opposite of entry):
+    - Exiting BUY_YES (selling YES): fill at mid - half_spread
+    - Exiting BUY_NO (selling NO): fill at mid + half_spread
+    """
+    # Exit direction is opposite of position direction
+    exit_direction = "BUY_NO" if pos.direction == "BUY_YES" else "BUY_YES"
+    # Spread is adverse: selling YES = BUY_NO direction for pricing
+    fill_price, filled_qty = paper_fill_adjust(exit_price, exit_direction, contracts)
     return FillResult(
         order_id=f"paper-exit-{uuid4()}",
         ticker=pos.ticker,
-        direction="BUY_NO" if pos.direction == "BUY_YES" else "BUY_YES",
-        quantity=contracts,
-        price=exit_price,
-        status="paper",
-        fill_cost=contracts * exit_price,
+        direction=exit_direction,
+        quantity=filled_qty,
+        price=fill_price,
+        status="paper" if filled_qty > 0 else "rejected",
+        fill_cost=filled_qty * fill_price,
         timestamp=datetime.now(timezone.utc),
     )
 
@@ -137,7 +146,7 @@ async def execution_loop(
                 tracker.close_position(
                     pos.id,
                     exit_decision.trigger,
-                    exit_decision.contracts_to_exit,
+                    fill.quantity,
                     fill.price,
                     tick_counter,
                 )

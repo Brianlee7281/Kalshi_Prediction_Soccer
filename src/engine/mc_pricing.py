@@ -17,7 +17,7 @@ import numpy as np
 
 from src.common.logging import get_logger
 from src.common.types import MarketProbs
-from src.math.compute_mu import compute_remaining_mu
+from src.math.compute_mu import compute_remaining_mu_v5 as compute_remaining_mu
 from src.math.mc_core import mc_simulate_remaining
 try:
     from src.math.mc_core import mc_simulate_remaining_v5

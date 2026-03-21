@@ -1,12 +1,13 @@
 """Phase 4 order management: paper fills + live Kalshi limit orders.
 
-Paper mode: immediate fill at P_kalshi.
+Paper mode: spread-adjusted fill with depth-limited partial fills.
 Live mode: limit order at P_model (NOT P_kalshi), with repricing on drift.
 """
 
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -19,6 +20,37 @@ from src.common.types import FillResult, Signal, TradingMode
 from src.execution.config import CONFIG
 
 log = structlog.get_logger("order_manager")
+
+
+def paper_fill_adjust(
+    mid: float, direction: str, contracts: int
+) -> tuple[float, int]:
+    """Apply spread and depth adjustment for paper fills.
+
+    Args:
+        mid: Mid-price from orderbook.
+        direction: "BUY_YES" or "BUY_NO".
+        contracts: Requested number of contracts.
+
+    Returns:
+        (adjusted_price, filled_quantity)
+    """
+    half_spread = CONFIG.PAPER_HALF_SPREAD
+    if direction == "BUY_YES":
+        price = min(0.99, mid + half_spread)
+    else:
+        price = max(0.01, mid - half_spread)
+
+    depth = CONFIG.PAPER_TYPICAL_DEPTH
+    if contracts <= depth:
+        filled = contracts
+    else:
+        fill_prob = depth / contracts
+        excess = contracts - depth
+        extra = sum(1 for _ in range(excess) if random.random() < fill_prob)
+        filled = depth + extra
+
+    return price, filled
 
 
 class OrderManager:
@@ -54,21 +86,27 @@ class OrderManager:
             return None
 
         if self.trading_mode == TradingMode.PAPER:
+            fill_price, filled_qty = paper_fill_adjust(
+                signal.P_kalshi, signal.direction, signal.contracts,
+            )
             fill = FillResult(
                 order_id=f"paper-{uuid4()}",
                 ticker=signal.ticker,
                 direction=signal.direction,
-                quantity=signal.contracts,
-                price=signal.P_kalshi,
-                status="paper",
-                fill_cost=signal.contracts * signal.P_kalshi,
+                quantity=filled_qty,
+                price=fill_price,
+                status="paper" if filled_qty > 0 else "rejected",
+                fill_cost=filled_qty * fill_price,
                 timestamp=datetime.now(timezone.utc),
             )
             log.info(
                 "order_placed",
                 mode="paper",
                 ticker=signal.ticker,
-                contracts=signal.contracts,
+                requested=signal.contracts,
+                filled=filled_qty,
+                mid=signal.P_kalshi,
+                fill_price=round(fill_price, 4),
             )
             return fill
 

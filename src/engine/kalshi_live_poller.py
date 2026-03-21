@@ -78,10 +78,10 @@ async def kalshi_live_poller(
                     timeout=10.0,
                 )
             except (asyncio.TimeoutError, Exception) as exc:
-                logger.warning("kalshi_live_poll_error", error=str(exc))
-                sleep_for = next_tick - time.monotonic()
-                if sleep_for > 0:
-                    await asyncio.sleep(sleep_for)
+                err_msg = str(exc) or type(exc).__name__
+                logger.warning("kalshi_live_poll_error", error=err_msg)
+                sleep_for = max(poll_interval, next_tick - time.monotonic())
+                await asyncio.sleep(sleep_for)
                 continue
 
             # Recording
@@ -127,13 +127,14 @@ async def kalshi_live_poller(
                         "model_t": model.t,
                     })
 
-            # Stoppage time update (mirrors goalserve_poller logic)
+            # Stoppage time update: state.stoppage is elapsed stoppage minutes
+            # (not announced total), so T_exp must stay ahead of model.t.
             if (
                 state.stoppage > 0
                 and model.engine_phase == "SECOND_HALF"
                 and model.t >= 85.0
             ):
-                model.update_T_exp(state.stoppage)
+                model.update_T_exp_absolute(model.t + 3.0)
 
             # HMM/DomIndex: no shots/corners/possession from Kalshi — pass None.
             # Goals are fed via handle_goal → hmm_estimator.record_goal().
@@ -234,6 +235,8 @@ def _kalshi_half_to_phase(half: str) -> str | None:
         "1st": "FIRST_HALF",
         "2nd": "SECOND_HALF",
         "HT": "HALFTIME",
+        "Halftime": "HALFTIME",
+        "halftime": "HALFTIME",
         "FT": "FINISHED",
     }
     return _MAP.get(half)

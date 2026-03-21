@@ -1,7 +1,7 @@
 """LiveMatchModel — shared mutable state for a single live match.
 
 Central state object read/written by all three Phase 3 coroutines
-(tick_loop, odds_api_listener, goalserve_poller). Single-threaded
+(tick_loop, odds_api_listener, kalshi_live_poller). Single-threaded
 asyncio means no locks are needed.
 """
 
@@ -292,6 +292,17 @@ class LiveMatchModel:
             inj_minute=inj_minute,
             new_T_exp=new_T,
         )
+
+    def update_T_exp_absolute(self, new_T: float) -> None:
+        """Set T_exp to an absolute value, ensuring MC always has remaining time.
+
+        Used during stoppage when Kalshi's stoppage field is elapsed minutes
+        (not announced total), so T_exp must stay ahead of model.t.
+        """
+        if new_T <= self.T_exp:
+            return
+        self.T_exp = new_T
+        self.basis_bounds[-1] = new_T
 
     @property
     def order_allowed(self) -> bool:

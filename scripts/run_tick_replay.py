@@ -21,7 +21,6 @@ import argparse
 import asyncio
 import json
 import sys
-from bisect import bisect_right
 from pathlib import Path
 
 import structlog
@@ -73,53 +72,28 @@ def _load_orderbook(ob_dir: Path) -> list[tuple[float, str, dict]]:
     return records
 
 
-def _build_minute_to_wall(ob_dir: Path) -> list[tuple[int, float]]:
-    """Build (match_minute, wall_clock) mapping from kalshi_live.jsonl."""
-    path = ob_dir / "kalshi_live.jsonl"
-    if not path.exists():
-        return []
-    seen: dict[int, float] = {}
-    with open(path, encoding="utf-8") as f:
+def _compute_clock_offset(tick_dir: Path) -> float:
+    """Compute the offset between recordings _ts and latency _ts_wall.
+
+    Uses goal events which have both _ts (recordings monotonic) and
+    occurence_ts (Kalshi wall clock / unix epoch).
+    Returns offset such that: wall_clock = recordings._ts + offset.
+    """
+    events_path = tick_dir / "events.jsonl"
+    if not events_path.exists():
+        return 0.0
+    offsets: list[float] = []
+    with open(events_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            r = json.loads(line)
-            m = r.get("minute", 0)
-            ts = r.get("_ts_wall", 0.0)
-            if m not in seen:
-                seen[m] = ts
-    return sorted(seen.items())
-
-
-def _build_time_interpolator(
-    minute_wall: list[tuple[int, float]],
-) -> callable:
-    """Return a function that maps match time (minutes) → wall clock (epoch).
-
-    Uses linear interpolation between known minute boundaries.
-    """
-    if not minute_wall:
-        return lambda t: 0.0
-    minutes = [m for m, _ in minute_wall]
-    walls = [w for _, w in minute_wall]
-
-    def interpolate(t: float) -> float:
-        if t <= minutes[0]:
-            return walls[0]
-        if t >= minutes[-1]:
-            return walls[-1]
-        idx = bisect_right(minutes, t) - 1
-        if idx >= len(minutes) - 1:
-            return walls[-1]
-        m0, m1 = minutes[idx], minutes[idx + 1]
-        w0, w1 = walls[idx], walls[idx + 1]
-        if m1 == m0:
-            return w0
-        frac = (t - m0) / (m1 - m0)
-        return w0 + frac * (w1 - w0)
-
-    return interpolate
+            e = json.loads(line)
+            if e.get("type") == "goal" and e.get("occurence_ts") and e.get("_ts"):
+                offsets.append(e["occurence_ts"] - e["_ts"])
+    if not offsets:
+        return 0.0
+    return sum(offsets) / len(offsets)
 
 
 def _load_metadata(d: Path) -> dict:
@@ -241,10 +215,14 @@ def _tick_to_payload(tick: dict) -> TickPayload:
         hmm_state=tick.get("hmm_state", 0),
         dom_index=tick.get("dom_index", 0.0),
         surprise_score=tick.get("surprise_score", 0.0),
-        order_allowed=tick.get("order_allowed", True),
-        cooldown=tick.get("cooldown", False),
+        # Override cooldown/order_allowed from recorded data — the live run
+        # had a tick-based cooldown that blocked post-goal trading.  Our current
+        # model removes that cooldown (post-goal is where edges appear).
+        # Only respect ob_freeze (VAR/penalty — genuinely unreliable orderbook).
+        order_allowed=not tick.get("ob_freeze", False),
+        cooldown=False,
         ob_freeze=tick.get("ob_freeze", False),
-        event_state=tick.get("event_state", "IDLE"),
+        event_state="IDLE",
     )
 
 
@@ -259,8 +237,7 @@ async def run_tick_replay(
     # Load data
     ticks = _load_ticks(tick_dir)
     ob_records = _load_orderbook(ob_dir)
-    minute_wall = _build_minute_to_wall(ob_dir)
-    t_to_wall = _build_time_interpolator(minute_wall)
+    clock_offset = _compute_clock_offset(tick_dir)
 
     # Metadata
     ob_meta = _load_metadata(ob_dir)
@@ -304,8 +281,8 @@ async def run_tick_replay(
 
     # Feed ticks
     for tick in ticks:
-        t = tick.get("t", 0.0)
-        wall_ts = t_to_wall(t)
+        tick_ts = tick.get("_ts", 0.0)
+        wall_ts = tick_ts + clock_offset
 
         # Advance orderbook to this tick's time
         model.p_kalshi = ob_player.advance_to(wall_ts)

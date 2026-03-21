@@ -130,8 +130,19 @@ def handle_period_change(
     if new_phase == "HALFTIME":
         model.halftime_start = now
 
-    elif new_phase == "SECOND_HALF" and model.halftime_start > 0:
-        model.halftime_accumulated = now - model.halftime_start
+    elif new_phase == "SECOND_HALF":
+        if model.halftime_start > 0:
+            model.halftime_accumulated = now - model.halftime_start
+        elif model._last_period == "FIRST_HALF":
+            # HALFTIME was skipped (data source went 1st → 2nd directly).
+            # Estimate halftime as the gap since the last tick at ~t=45.
+            # Use a conservative 15-minute default if we can't compute it.
+            model.halftime_accumulated = 15.0 * 60  # 15 minutes in seconds
+            logger.warning(
+                "halftime_skipped_estimated",
+                match_id=model.match_id,
+                halftime_accumulated=model.halftime_accumulated,
+            )
 
     model.engine_phase = new_phase
     model._last_period = new_phase

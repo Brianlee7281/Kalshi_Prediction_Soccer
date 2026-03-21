@@ -4,7 +4,7 @@ v5 pipeline (7 steps per tick):
   1. Update effective match time
   2. EKF prediction step (uncertainty grows)
   3. No-goal EKF update (weak negative evidence)
-  4. Layer 2 already updated by goalserve_poller
+  4. Layer 2 already updated by kalshi_live_poller
   5. MC simulation → P_model
   6. Compute σ²_p (total probability uncertainty)
   7. Assemble TickPayload → Phase 4 queue + Redis
@@ -126,7 +126,7 @@ async def tick_loop(
 
         recorder = getattr(model, "recorder", None)
         if recorder is not None:
-            recorder.record_tick(payload)
+            recorder.record_tick(payload, p_kalshi=model.p_kalshi)
 
         logger.debug(
             "tick",
