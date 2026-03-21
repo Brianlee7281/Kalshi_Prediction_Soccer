@@ -109,6 +109,11 @@ async def run_replay(replay_dir: Path, speed: float) -> None:
     # Start in FIRST_HALF for replay (skip waiting for kickoff)
     model.engine_phase = "FIRST_HALF"
 
+    # Attach recorder to save replay results
+    output_dir = Path("data/replay_results")
+    recorder = MatchRecorder(match_id, base_dir=output_dir)
+    model.recorder = recorder  # type: ignore[attr-defined]
+
     server = ReplayServer(replay_dir, speed=speed)
     await server.start()
 
@@ -138,6 +143,7 @@ async def run_replay(replay_dir: Path, speed: float) -> None:
             odds_api_listener(model),
         )
     finally:
+        recorder.finalize()
         await live_client.close()
         await server.stop()
         log.info(
@@ -145,6 +151,7 @@ async def run_replay(replay_dir: Path, speed: float) -> None:
             match_id=match_id,
             ticks=model.tick_count,
             final_score=model.score,
+            output_dir=str(output_dir / match_id),
         )
 
 

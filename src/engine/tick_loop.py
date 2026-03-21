@@ -44,6 +44,7 @@ async def tick_loop(
                        Use 0.0 for replay (runs as fast as MC allows).
     """
     start_time = time.monotonic()
+    _last_t = -1.0  # track last processed model.t for replay dedup
 
     while model.engine_phase != "FINISHED":
         model.tick_count += 1
@@ -64,6 +65,13 @@ async def tick_loop(
         # In replay mode (tick_interval=0), poller drives model.t directly
         if tick_interval > 0:
             model.update_time()
+        else:
+            # Replay: skip MC if model.t hasn't advanced (poller hasn't fed new data)
+            if model.t == _last_t:
+                await asyncio.sleep(0.01)  # yield to let poller run
+                model.tick_count -= 1  # don't count skipped ticks
+                continue
+            _last_t = model.t
 
         # Step 2: EKF prediction step
         if model.ekf_tracker is not None:
