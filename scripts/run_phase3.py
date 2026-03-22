@@ -225,6 +225,65 @@ def _extract_kalshi_prematch_odds(
     return implied
 
 
+async def _fetch_live_prematch_odds(
+    kalshi_rest: "KalshiClient",
+    kalshi_tickers: dict[str, str],
+) -> tuple[MarketProbs | None, str, str]:
+    """Fetch pre-match mid-prices from Kalshi REST API for live recording.
+
+    Returns (implied MarketProbs or None, home_team, away_team).
+    """
+    mids: dict[str, float] = {}
+    home_team = "HomeTeam"
+    away_team = "AwayTeam"
+
+    for market_type, ticker in kalshi_tickers.items():
+        try:
+            market = await kalshi_rest.get_market(ticker)
+        except Exception as exc:
+            log.warning("prematch_market_fetch_failed", ticker=ticker, error=str(exc))
+            continue
+
+        yes_bid = market.get("yes_bid_dollars")
+        yes_ask = market.get("yes_ask_dollars")
+        if yes_bid and yes_ask:
+            mids[market_type] = (float(yes_bid) + float(yes_ask)) / 2.0
+        elif yes_bid:
+            mids[market_type] = float(yes_bid)
+        elif yes_ask:
+            mids[market_type] = float(yes_ask)
+
+        # Extract team names from the title (e.g. "Tottenham vs Nottingham Winner?")
+        title = market.get("title", "")
+        if " vs " in title and home_team == "HomeTeam":
+            parts = title.split(" vs ", 1)
+            home_team = parts[0].strip()
+            away_part = parts[1].strip()
+            # Remove trailing " Winner?" or similar
+            for suffix in (" Winner?", " Game"):
+                if away_part.endswith(suffix):
+                    away_part = away_part[: -len(suffix)].strip()
+            away_team = away_part
+
+    if not {"home_win", "draw", "away_win"}.issubset(mids):
+        log.warning("live_prematch_incomplete", found=list(mids.keys()))
+        return None, home_team, away_team
+
+    total = mids["home_win"] + mids["draw"] + mids["away_win"]
+    implied = MarketProbs(
+        home_win=mids["home_win"] / total,
+        draw=mids["draw"] / total,
+        away_win=mids["away_win"] / total,
+    )
+    log.info(
+        "live_prematch_odds",
+        home_win=round(implied.home_win, 4),
+        draw=round(implied.draw, 4),
+        away_win=round(implied.away_win, 4),
+    )
+    return implied, home_team, away_team
+
+
 _FALLBACK_PARAMS = {
     "Q": [
         [-0.02, 0.01, 0.01, 0.00],
@@ -325,10 +384,37 @@ async def run_live(match_id: str, league: str) -> None:
     # Backsolve intensities from live pre-match orderbook
     backsolve_kwargs: dict = {}
     use_params = db_params or _FALLBACK_PARAMS
-    # TODO: extract pre-match odds from live orderbook (like _extract_kalshi_prematch_odds for recordings)
+    implied, home_team, away_team = await _fetch_live_prematch_odds(
+        kalshi_rest, kalshi_tickers,
+    )
+    if implied is not None:
+        b = np.array(use_params["b"])
+        Q = np.array(use_params["Q"])
+        alpha_1 = use_params.get("alpha_1", 0.0)
+        basis_bounds: np.ndarray | None = None
+        if len(b) == 8:
+            basis_bounds = np.array(
+                [0.0, 15.0, 30.0,
+                 45.0 + alpha_1, 60.0 + alpha_1, 75.0 + alpha_1,
+                 85.0 + alpha_1, 90.0 + alpha_1, 93.0],
+                dtype=np.float64,
+            )
+        a_H, a_A = backsolve_intensities(implied, b, Q, basis_bounds)
+        C_time = compute_C_time(b, basis_bounds)
+        mu_H = float(np.exp(a_H) * C_time)
+        mu_A = float(np.exp(a_A) * C_time)
+        backsolve_kwargs = dict(
+            a_H=a_H, a_A=a_A, mu_H=mu_H, mu_A=mu_A, C_time=C_time,
+            prediction_method="backsolve_kalshi", ekf_P0=0.15,
+            market_implied=implied,
+        )
+        log.info(
+            "live_backsolve",
+            a_H=round(a_H, 4), a_A=round(a_A, 4),
+            mu_H=round(mu_H, 4), mu_A=round(mu_A, 4),
+        )
 
-    home_team = match_id  # placeholder — live mode doesn't have team names yet
-    away_team = match_id
+    await kalshi_rest.close()
 
     model = _make_mock_model(
         match_id,
@@ -342,6 +428,13 @@ async def run_live(match_id: str, league: str) -> None:
     model.kalshi_event_ticker = match_id
 
     recorder = MatchRecorder(match_id)
+    recorder.set_match_info(
+        event_ticker=match_id,
+        league=league,
+        home_team=home_team,
+        away_team=away_team,
+        kalshi_tickers=list(kalshi_tickers.values()),
+    )
     model.recorder = recorder  # type: ignore[attr-defined]
 
     # Kalshi WS client for orderbook sync (populates model.p_kalshi)
@@ -354,6 +447,8 @@ async def run_live(match_id: str, league: str) -> None:
         "phase3_live_start",
         match_id=match_id,
         league=league,
+        home=home_team,
+        away=away_team,
         tickers=kalshi_tickers,
     )
 

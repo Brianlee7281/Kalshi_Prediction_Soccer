@@ -27,7 +27,10 @@ def _load_time_mapping(kalshi_live_path: Path) -> list[tuple[float, float]]:
     Only includes records where status == "live" (match in progress).
     Returns sorted by match_t.
     """
-    mapping: list[tuple[float, float]] = []
+    # Keep only the FIRST wall_clock per integer match_t.
+    # Without dedup, bisect picks the LAST duplicate → interpolation spans
+    # ~1s instead of ~60s → all ticks in a minute get the same OB state.
+    first_seen: dict[int, float] = {}
     with open(kalshi_live_path, encoding="utf-8") as f:
         for line in f:
             record = json.loads(line)
@@ -38,11 +41,11 @@ def _load_time_mapping(kalshi_live_path: Path) -> list[tuple[float, float]]:
             stoppage = record.get("stoppage", 0)
             if ts_wall is None:
                 continue
-            match_t = float(minute + stoppage)
-            mapping.append((match_t, float(ts_wall)))
+            match_t_int = minute + stoppage
+            if match_t_int not in first_seen:
+                first_seen[match_t_int] = float(ts_wall)
 
-    mapping.sort(key=lambda x: x[0])
-    return mapping
+    return [(float(k), v) for k, v in sorted(first_seen.items())]
 
 
 def _match_t_to_wall_clock(

@@ -45,6 +45,29 @@ class MatchRecorder:
         self._handles: dict[str, TextIOWrapper] = {}
         self._counts: dict[str, int] = {name: 0 for name in _STREAM_NAMES}
         self._last_flush: float = self._start_time
+        self._match_info: dict = {}
+
+    def set_match_info(
+        self,
+        *,
+        event_ticker: str = "",
+        league: str = "",
+        home_team: str = "",
+        away_team: str = "",
+        kalshi_tickers: list[str] | None = None,
+    ) -> None:
+        """Store extra match context to include in metadata.json."""
+        self._match_info = {
+            k: v
+            for k, v in {
+                "event_ticker": event_ticker,
+                "league": league,
+                "home_team": home_team,
+                "away_team": away_team,
+                "kalshi_tickers": kalshi_tickers or [],
+            }.items()
+            if v  # skip empty strings and empty lists
+        }
 
     def _get_handle(self, stream: str) -> TextIOWrapper:
         """Get or lazily open a file handle for the given stream."""
@@ -105,6 +128,7 @@ class MatchRecorder:
         end_time = time.monotonic()
         metadata = {
             "match_id": self.match_id,
+            **self._match_info,
             "start_time": self._start_time,
             "end_time": end_time,
             "duration_s": end_time - self._start_time,
