@@ -103,14 +103,16 @@ class MockDBPool:
         """Execute query and return status string."""
         q = query.strip().upper()
 
-        # UPDATE exposure_reservation SET status = 'CONFIRMED' ...
-        if "EXPOSURE_RESERVATION" in q and "CONFIRMED" in q:
-            self._confirm_reservation(*args)
-            return "UPDATE 1"
-
-        # UPDATE exposure_reservation SET status = 'RELEASED' WHERE id = $1
+        # UPDATE exposure_reservation SET status = 'RELEASED' WHERE id = $1 ...
+        # Must check RELEASED before CONFIRMED because idempotent release SQL
+        # contains both 'RELEASED' and 'CONFIRMED' in the IN clause
         if "EXPOSURE_RESERVATION" in q and "RELEASED" in q and "WHERE ID" in q:
             self._release_reservation(*args)
+            return "UPDATE 1"
+
+        # UPDATE exposure_reservation SET status = 'CONFIRMED' ...
+        if "EXPOSURE_RESERVATION" in q and "CONFIRMED" in q and "RELEASED" not in q:
+            self._confirm_reservation(*args)
             return "UPDATE 1"
 
         # UPDATE exposure_reservation SET status = 'RELEASED' WHERE status = 'RESERVED' AND created_at < ...
@@ -173,7 +175,7 @@ class MockDBPool:
             return
         rid = args[0]
         for r in self.reservations:
-            if r["id"] == rid:
+            if r["id"] == rid and r["status"] in ("RESERVED", "CONFIRMED"):
                 r["status"] = "RELEASED"
                 r["resolved_at"] = time.time()
                 break

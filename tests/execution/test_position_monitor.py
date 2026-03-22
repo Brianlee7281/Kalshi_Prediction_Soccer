@@ -294,6 +294,50 @@ def test_position_trim_partial():
     assert tracker3.open_positions[pos3.id].quantity == 2828
 
 
+def test_position_trim_buy_no():
+    """POSITION_TRIM with BUY_NO uses correct kelly and cost_per_contract."""
+    tracker = PositionTracker(min_hold_ticks=5)
+    # BUY_NO: p_model=0.40, p_kalshi=0.55 (model says overpriced)
+    signal = _make_signal(direction="BUY_NO", p_model=0.40, p_kalshi=0.55)
+    fill = _make_fill(price=0.55, quantity=10000)
+    tracker.add_position(signal, fill, tick=0, t=10.0)
+
+    payload = _make_payload(home_win=0.40, ekf_P_H=0.01, mu_H=0.2)
+    p_kalshi = {"home_win": 0.55}
+
+    # BUY_NO kelly: b_no=0.55/0.45=1.2222, p_win=0.60
+    # f*=(1.2222*0.60-0.40)/1.2222 = 0.2727
+    # cost_per_contract = 1-0.55 = 0.45
+    # kelly_optimal = max(1, int(0.2727 * 10000 / 0.45)) = 6060
+    # 10000 > 2*6060 = 12120? No → no trim with these numbers.
+    # Need bigger quantity or smaller kelly to trigger trim.
+
+    # Use p_model very close to p_kalshi for tiny kelly
+    payload2 = _make_payload(home_win=0.545, ekf_P_H=0.01, mu_H=0.2)
+    # BUY_NO kelly: b_no=1.2222, p_win=1-0.545=0.455
+    # f*=(1.2222*0.455-0.545)/1.2222 = (0.5561-0.545)/1.2222 = 0.0111/1.2222 = 0.00909
+    # cost_per_contract = 0.45
+    # kelly_optimal = max(1, int(0.00909*10000/0.45)) = max(1,202) = 202
+    # 10000 > 2*202 = 404 → POSITION_TRIM fires
+    # BUT ev = p_k - p_model = 0.55 - 0.545 = 0.005, threshold ~0.017 → EDGE_DECAY fires first
+
+    # Need ev > theta AND small kelly → use moderate edge with large quantity
+    # p_model=0.48, p_kalshi=0.55: ev=0.07, should pass threshold
+    payload3 = _make_payload(home_win=0.48, ekf_P_H=0.01, mu_H=0.2)
+    # BUY_NO kelly: b_no=1.2222, p_win=0.52
+    # f*=(1.2222*0.52-0.48)/1.2222 = (0.6356-0.48)/1.2222 = 0.1556/1.2222 = 0.1273
+    # cost_per_contract = 0.45
+    # kelly_optimal = max(1, int(0.1273*10000/0.45)) = max(1,2828) = 2828
+    # 10000 > 2*2828 = 5656 → POSITION_TRIM fires!
+
+    for _ in range(6):
+        decisions = tracker.check_exits(payload3, p_kalshi)
+
+    assert len(decisions) == 1
+    assert decisions[0].trigger == ExitTrigger.POSITION_TRIM
+    assert decisions[0].contracts_to_exit == 10000 - 2828
+
+
 def test_position_trim_not_triggered():
     """No trim when quantity <= 2x kelly optimal."""
     tracker = PositionTracker(min_hold_ticks=5)

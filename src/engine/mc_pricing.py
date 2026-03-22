@@ -114,6 +114,77 @@ async def compute_mc_prices(
     return P_model, sigma_MC
 
 
+async def compute_mc_for_score(
+    model: LiveMatchModel, S_H: int, S_A: int, N: int = 50_000
+) -> MarketProbs:
+    """Run MC simulation for an explicit score (e.g. hypothetical goal).
+
+    Unlike compute_mc_prices, this does NOT update model.mu_H/mu_A.
+    Used by GoalDetector to precompute fingerprints for adjacent scores.
+    """
+    Q_diag = np.diag(model.Q).copy()
+    Q_off = np.zeros((4, 4), dtype=np.float64)
+    for i in range(4):
+        row_sum = 0.0
+        for j in range(4):
+            if i != j and model.Q[i, j] > 0:
+                row_sum += model.Q[i, j]
+        if row_sum > 0:
+            for j in range(4):
+                if i != j:
+                    Q_off[i, j] = model.Q[i, j] / row_sum
+
+    seed = int(time.monotonic() * 1000) % (2**31)
+    score_diff = S_H - S_A
+
+    loop = asyncio.get_running_loop()
+    if _HAS_V5_MC and model.delta_H_pos is not None:
+        results = await loop.run_in_executor(
+            None,
+            partial(
+                mc_simulate_remaining_v5,
+                t_now=model.t, T_end=model.T_exp,
+                S_H=S_H, S_A=S_A,
+                state=model.current_state_X,
+                score_diff=score_diff,
+                a_H=model.a_H, a_A=model.a_A,
+                b=model.b,
+                gamma_H=model.gamma_H, gamma_A=model.gamma_A,
+                delta_H_pos=model.delta_H_pos,
+                delta_H_neg=model.delta_H_neg,
+                delta_A_pos=model.delta_A_pos,
+                delta_A_neg=model.delta_A_neg,
+                Q_diag=Q_diag, Q_off=Q_off,
+                basis_bounds=model.basis_bounds,
+                N=N, seed=seed,
+                eta_H=model.eta_H, eta_A=model.eta_A,
+                eta_H2=model.eta_H2, eta_A2=model.eta_A2,
+                stoppage_1_start=45.0,
+                stoppage_2_start=90.0,
+            ),
+        )
+    else:
+        results = await loop.run_in_executor(
+            None,
+            partial(
+                mc_simulate_remaining,
+                t_now=model.t, T_end=model.T_exp,
+                S_H=S_H, S_A=S_A,
+                state=model.current_state_X,
+                score_diff=score_diff,
+                a_H=model.a_H, a_A=model.a_A,
+                b=model.b,
+                gamma_H=model.gamma_H, gamma_A=model.gamma_A,
+                delta_H=model.delta_H, delta_A=model.delta_A,
+                Q_diag=Q_diag, Q_off=Q_off,
+                basis_bounds=model.basis_bounds,
+                N=N, seed=seed,
+            ),
+        )
+
+    return _results_to_market_probs(results, S_H, S_A)
+
+
 def _results_to_market_probs(results: np.ndarray, S_H: int, S_A: int) -> MarketProbs:
     """Convert MC simulation results (N,2) array to MarketProbs.
 

@@ -302,6 +302,8 @@ class Position(BaseModel):
 
     # Database ID (set after save_position)
     db_id: int | None = None
+    # Exposure reservation ID (set on entry, used to release on exit)
+    reservation_id: int | None = None
 
     # Tracking (updated each tick by check_exits)
     unrealized_pnl: float = 0.0

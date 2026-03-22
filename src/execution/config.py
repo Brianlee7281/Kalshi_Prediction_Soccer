@@ -14,14 +14,15 @@ class ExecutionConfig:
     C_SLIPPAGE: float = 0.005          # limit order execution delay cost
     Z_ALPHA: float = 1.0               # ~84% one-tailed confidence
     N_MC: int = 50_000                 # Monte Carlo paths
+    SIGMA_MODEL_CAP: float = 0.03      # max sigma_model contribution to threshold/shrinkage
 
     # Kelly sizing (§8.4, patterns.md Pattern 5)
-    ALPHA_BASE: float = 0.10           # baseline Kelly multiplier
+    ALPHA_BASE: float = 0.25           # quarter-Kelly baseline
     ALPHA_SURPRISE: float = 0.25       # surprise bonus — matches patterns.md kelly_surprise_bonus
                                        # TODO: recalibrate from 307-match backtest
 
     # Risk caps (§13.4)
-    PER_ORDER_CAP: float = 50.0        # max dollars per order
+    PER_ORDER_CAP: float = 250.0       # max dollars per order
     PER_MATCH_CAP_FRAC: float = 0.10   # max fraction of bankroll per match
     TOTAL_EXPOSURE_CAP_FRAC: float = 0.20  # max fraction across all positions
 
@@ -37,7 +38,7 @@ class ExecutionConfig:
 
     # Paper fill simulation
     PAPER_HALF_SPREAD: float = 0.005   # half of C_SPREAD; entry/exit fill price penalty
-    PAPER_TYPICAL_DEPTH: int = 30      # contracts at best level; partial fills above this
+    PAPER_TYPICAL_DEPTH: int = 200     # contracts at best level; partial fills above this
 
 
 CONFIG = ExecutionConfig()

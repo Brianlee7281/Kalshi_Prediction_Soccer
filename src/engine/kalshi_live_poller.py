@@ -110,6 +110,7 @@ async def kalshi_live_poller(
 
             # Event detection and dispatch
             events = _detect_events_from_state(model, state)
+            goal_count = sum(1 for e in events if e["type"] == "goal")
             for event in events:
                 etype = event["type"]
                 if etype == "goal":
@@ -126,6 +127,16 @@ async def kalshi_live_poller(
                         "engine_phase": model.engine_phase,
                         "model_t": model.t,
                     })
+
+            # Flag multi-goal jumps for Goalserve confirmation
+            if goal_count > 1:
+                model.score_mismatch_since = time.monotonic()
+                logger.warning(
+                    "multi_goal_jump",
+                    match_id=model.match_id,
+                    goals_in_poll=goal_count,
+                    score=model.score,
+                )
 
             # Stoppage time update: state.stoppage is elapsed stoppage minutes
             # (not announced total), so T_exp must stay ahead of model.t.

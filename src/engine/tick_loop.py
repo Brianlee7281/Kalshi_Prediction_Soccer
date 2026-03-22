@@ -94,8 +94,19 @@ async def tick_loop(
 
         # Step 4: Layer 2 — HMM/DomIndex already updated by kalshi_live_poller
 
+        # Step 4.5: Goal detection (Layers 1-3)
+        detection = None
+        if model.goal_detector is not None:
+            detection = model.goal_detector.process_tick(
+                model.p_kalshi, model.tick_count
+            )
+
         # Step 5: MC simulation
         P_model, sigma_MC = await compute_mc_prices(model)
+
+        # Step 5.5: Update fingerprints (needs P_model from step 5)
+        if model.goal_detector is not None:
+            await model.goal_detector.update_fingerprints(current_P_model=P_model)
 
         # Step 6: σ²_p for Phase 4 (stored in sigma_MC for now)
 
@@ -124,6 +135,19 @@ async def tick_loop(
             ob_freeze=model.ob_freeze,
             event_state=model.event_state,
         )
+
+        # Apply goal detection overrides
+        if detection is not None:
+            if detection.inferred_P_model is not None:
+                # Layer 3 confirmed: trade on inferred P_model
+                payload = payload.model_copy(
+                    update={"P_model": detection.inferred_P_model, "ob_freeze": False}
+                )
+            elif detection.suppress_entries:
+                # Layer 1 active: suppress normal entries
+                payload = payload.model_copy(
+                    update={"ob_freeze": True, "order_allowed": False}
+                )
 
         if phase4_queue is not None:
             await phase4_queue.put(payload)

@@ -62,6 +62,7 @@ def compute_dynamic_threshold(
 
     sigma_mc_sq = p_hat * (1 - p_hat) / CONFIG.N_MC
     sigma_model_sq = ekf_P * (p_hat * (1 - p_hat) * mu_market) ** 2
+    sigma_model_sq = min(sigma_model_sq, CONFIG.SIGMA_MODEL_CAP ** 2)
     sigma_p = sqrt(sigma_mc_sq + sigma_model_sq)
     theta = CONFIG.C_SPREAD + CONFIG.C_SLIPPAGE + CONFIG.Z_ALPHA * sigma_p
     return theta

@@ -18,6 +18,7 @@ import structlog
 from src.clients.kalshi import KalshiClient
 from src.common.types import FillResult, Signal, TradingMode
 from src.execution.config import CONFIG
+from src.execution.kelly_sizer import cost_per_contract
 
 log = structlog.get_logger("order_manager")
 
@@ -96,7 +97,7 @@ class OrderManager:
                 quantity=filled_qty,
                 price=fill_price,
                 status="paper" if filled_qty > 0 else "rejected",
-                fill_cost=filled_qty * fill_price,
+                fill_cost=filled_qty * cost_per_contract(fill_price, signal.direction),
                 timestamp=datetime.now(timezone.utc),
             )
             log.info(
@@ -162,7 +163,7 @@ class OrderManager:
                 quantity=filled_qty if status == "filled" else 0,
                 price=fill_price,
                 status="full" if status == "filled" else "pending",
-                fill_cost=filled_qty * fill_price if status == "filled" else 0.0,
+                fill_cost=filled_qty * cost_per_contract(fill_price, signal.direction) if status == "filled" else 0.0,
                 timestamp=datetime.now(timezone.utc),
             )
 

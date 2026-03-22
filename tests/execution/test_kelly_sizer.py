@@ -9,6 +9,7 @@ from src.execution.kelly_sizer import (
     apply_baker_mchale_shrinkage,
     apply_surprise_multiplier,
     compute_kelly_fraction,
+    cost_per_contract,
     size_position,
 )
 
@@ -101,6 +102,35 @@ def test_kelly_fraction_degenerate():
     assert f == 0.0
 
 
+def test_kelly_fraction_buy_no():
+    # BUY_NO: p_model=0.40, p_kalshi=0.55
+    # b_no = 0.55/0.45 = 1.2222, p_win = 0.60
+    # f* = (1.2222*0.60 - 0.40) / 1.2222 = 0.2727
+    f = compute_kelly_fraction(0.40, 0.55, direction="BUY_NO")
+    assert f == pytest.approx(0.2727, abs=0.001)
+
+
+def test_kelly_fraction_buy_no_no_edge():
+    # BUY_NO when p_model > p_kalshi (wrong direction for NO) -> 0
+    f = compute_kelly_fraction(0.60, 0.55, direction="BUY_NO")
+    assert f == 0.0
+
+
+def test_kelly_fraction_default_unchanged():
+    # Default direction="BUY_YES" preserves existing behavior
+    f_default = compute_kelly_fraction(0.62, 0.55)
+    f_explicit = compute_kelly_fraction(0.62, 0.55, direction="BUY_YES")
+    assert f_default == f_explicit
+
+
+def test_cost_per_contract_yes():
+    assert cost_per_contract(0.55, "BUY_YES") == 0.55
+
+
+def test_cost_per_contract_no():
+    assert cost_per_contract(0.55, "BUY_NO") == pytest.approx(0.45)
+
+
 # ── apply_baker_mchale_shrinkage ──────────────────────────────
 
 
@@ -152,3 +182,16 @@ def test_size_position_per_match_cap():
     )
     sized = size_position(signal, payload, bankroll=100.0)
     assert sized.kelly_amount <= 10.0
+
+
+def test_size_position_buy_no():
+    # BUY_NO: p_model=0.40 < p_kalshi=0.55 → should produce contracts > 0
+    signal = _make_signal(p_model=0.40, p_kalshi=0.55, direction="BUY_NO")
+    payload = _make_payload(
+        home_win=0.40, surprise_score=0.0, ekf_P_H=0.01, mu_H=0.2
+    )
+    sized = size_position(signal, payload, bankroll=10000.0)
+    assert sized.contracts > 0
+    # Contracts use NO-side cost: dollar_amount / (1 - 0.55) = dollar_amount / 0.45
+    expected_contracts = int(sized.kelly_amount / 0.45)
+    assert sized.contracts == expected_contracts

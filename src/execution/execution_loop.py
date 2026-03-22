@@ -27,7 +27,7 @@ from src.common.types import (
 from src.execution.config import CONFIG
 from src.execution.db_positions import close_position_db, save_position
 from src.execution.exposure_manager import ExposureManager
-from src.execution.kelly_sizer import size_position
+from src.execution.kelly_sizer import cost_per_contract, size_position
 from src.execution.order_manager import OrderManager, paper_fill_adjust
 from src.execution.pnl_calculator import compute_unrealized_pnl
 from src.execution.position_monitor import PositionTracker
@@ -79,7 +79,7 @@ def _paper_exit_fill(
         quantity=filled_qty,
         price=fill_price,
         status="paper" if filled_qty > 0 else "rejected",
-        fill_cost=filled_qty * fill_price,
+        fill_cost=filled_qty * cost_per_contract(fill_price, exit_direction),
         timestamp=datetime.now(timezone.utc),
     )
 
@@ -169,6 +169,8 @@ async def execution_loop(
                     exit_revenue = (1.0 - fill.price) * fill.quantity
                 await exposure.update_bankroll(exit_revenue)
                 bankroll += exit_revenue
+                if pos.reservation_id is not None:
+                    await exposure.release_exposure(pos.reservation_id)
                 if redis_client:
                     await publish_position_update(redis_client, pos, "exit")
 
@@ -188,7 +190,8 @@ async def execution_loop(
                 if signal.contracts <= 0:
                     continue
 
-                amount = signal.contracts * signal.P_kalshi
+                cpc = cost_per_contract(signal.P_kalshi, signal.direction)
+                amount = signal.contracts * cpc
                 res_id = await exposure.reserve_exposure(
                     payload.match_id, signal.ticker, amount
                 )
@@ -199,7 +202,8 @@ async def execution_loop(
                 if fill is not None and fill.quantity > 0:
                     await exposure.confirm_exposure(res_id, fill.fill_cost)
                     pos = tracker.add_position(
-                        signal, fill, tick_counter, payload.t
+                        signal, fill, tick_counter, payload.t,
+                        reservation_id=res_id,
                     )
                     try:
                         pos.db_id = await save_position(db_pool, pos)
@@ -233,11 +237,18 @@ async def execution_loop(
                 bankroll=round(bankroll, 2),
             )
 
-    # Settlement
+    # Settlement — collect reservation IDs before positions are cleared
+    settled_res_ids = [
+        pos.reservation_id
+        for pos in tracker.open_positions.values()
+        if pos.reservation_id is not None
+    ]
     match_pnl = await settle_match(
         model.match_id, last_score, tracker, db_pool,
         kalshi_client, trading_mode,
     )
+    for res_id in settled_res_ids:
+        await exposure.release_exposure(res_id)
 
     log.info(
         "execution_loop_finished",

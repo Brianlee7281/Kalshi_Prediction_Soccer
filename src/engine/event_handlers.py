@@ -74,6 +74,39 @@ def handle_goal(
         model.a_A = new_a_A
         model.last_goal_type = model.strength_updater.classify_goal(team).label
 
+    if model.goal_detector is not None:
+        model.goal_detector.on_event_confirmed("goal", model.score)
+
+
+def handle_score_correction(
+    model: LiveMatchModel,
+    corrected_score: tuple[int, int],
+    source: str,
+) -> None:
+    """Correct the model score when a data source reports a different score.
+
+    Used when Goalserve disagrees with Kalshi (e.g. VAR goal cancellation).
+    Freezes trading until the next MC tick recomputes P_model.
+
+    Does NOT undo EKF/strength updates — those are small and self-correcting.
+    """
+    old_score = model.score
+    model.score = corrected_score
+    model.delta_S = corrected_score[0] - corrected_score[1]
+    model.ob_freeze = True
+    model.event_state = "SCORE_CORRECTED"
+
+    logger.critical(
+        "score_corrected",
+        match_id=model.match_id,
+        old_score=old_score,
+        new_score=corrected_score,
+        source=source,
+    )
+
+    if model.goal_detector is not None:
+        model.goal_detector.on_event_confirmed("score_correction", corrected_score)
+
 
 def handle_red_card(
     model: LiveMatchModel,

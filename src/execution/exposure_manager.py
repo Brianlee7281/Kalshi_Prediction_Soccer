@@ -83,11 +83,11 @@ class ExposureManager:
         )
 
     async def release_exposure(self, reservation_id: int) -> None:
-        """Release a reservation (order failed or cancelled)."""
+        """Release a reservation (order failed, cancelled, or position closed)."""
         await self.db.execute(
             "UPDATE exposure_reservation "
             "SET status = 'RELEASED', resolved_at = NOW() "
-            "WHERE id = $1",
+            "WHERE id = $1 AND status IN ('RESERVED', 'CONFIRMED')",
             reservation_id,
         )
 

@@ -26,11 +26,87 @@ from pathlib import Path
 import structlog
 
 from src.common.types import MarketProbs, MatchPnL, TickPayload, TradingMode
+from src.engine.goal_detector import GoalDetector, GoalDetectionResult
 from src.engine.kalshi_ob_sync import _LocalBook
 from src.execution.execution_loop import execution_loop
 from src.execution.mock_db import MockDBPool
 
 log = structlog.get_logger("run_tick_replay")
+
+
+# ── Replay fingerprint building ──────────────────────────────────
+
+def _build_replay_fingerprints(
+    ticks: list[dict],
+    events_path: Path,
+) -> dict[tuple[int, int], dict[str, tuple[list[float], MarketProbs]]]:
+    """Build fingerprint table from recorded goal transitions.
+
+    For each goal in the recording, computes the P_model shift (before vs after)
+    and maps it to the pre-goal score state.
+
+    Returns:
+        {(S_H, S_A): {"home_goal": ([hw_d, dr_d, aw_d], P_model_after),
+                       "away_goal": ([hw_d, dr_d, aw_d], P_model_after)}}
+    """
+    events = []
+    if events_path.exists():
+        with open(events_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    events.append(json.loads(line))
+
+    goals = [e for e in events if e.get("type") == "goal"]
+    if not goals or not ticks:
+        return {}
+
+    table: dict[tuple[int, int], dict[str, tuple[list[float], MarketProbs]]] = {}
+
+    for g in goals:
+        gts = g.get("_ts", 0)
+        team = g.get("team", "")
+        score_after = tuple(g.get("score_after", [0, 0]))
+
+        # Find closest tick to event
+        evt_i = min(range(len(ticks)), key=lambda i: abs(ticks[i].get("_ts", 0) - gts))
+
+        # P_model BEFORE goal (30 ticks before event, safe from lag)
+        before_i = max(0, evt_i - 30)
+        pm_before = ticks[before_i].get("P_model", {})
+        score_before = tuple(ticks[before_i].get("score", [0, 0]))
+
+        # P_model AFTER goal (5 ticks after event, model has updated)
+        after_i = min(evt_i + 5, len(ticks) - 1)
+        pm_after = ticks[after_i].get("P_model", {})
+
+        # Fingerprint = delta vector
+        fp_vec = [
+            pm_after.get("home_win", 0) - pm_before.get("home_win", 0),
+            pm_after.get("draw", 0) - pm_before.get("draw", 0),
+            pm_after.get("away_win", 0) - pm_before.get("away_win", 0),
+        ]
+
+        p_model_after = MarketProbs(
+            home_win=pm_after.get("home_win", 0),
+            draw=pm_after.get("draw", 0),
+            away_win=pm_after.get("away_win", 0),
+            over_25=pm_after.get("over_25", 0),
+            btts_yes=pm_after.get("btts_yes", 0),
+        )
+
+        scenario = "home_goal" if team == "home" else "away_goal"
+
+        if score_before not in table:
+            table[score_before] = {}
+        table[score_before][scenario] = (fp_vec, p_model_after)
+
+    log.info(
+        "replay_fingerprints_built",
+        goals=len(goals),
+        score_states=len(table),
+    )
+    return table
 
 
 # ── Data loading ─────────────────────────────────────────────────
@@ -64,7 +140,7 @@ def _load_orderbook(ob_dir: Path) -> list[tuple[float, str, dict]]:
             if not line:
                 continue
             r = json.loads(line)
-            ts = r.get("_ts_wall", 0.0)
+            ts = r.get("_ts_wall") or r.get("_ts", 0.0)
             rtype = r.get("type", "")
             msg = r.get("msg", {})
             records.append((ts, rtype, msg))
@@ -279,16 +355,54 @@ async def run_tick_replay(
         execution_loop(phase4_queue, model, db_pool, TradingMode.PAPER)
     )
 
+    # Check if ticks have embedded p_kalshi (preferred source)
+    ticks_have_p_kalshi = bool(ticks and ticks[0].get("p_kalshi"))
+
+    # Goal detector with Layers 1-3
+    goal_detector = GoalDetector(model=None)
+
+    # Build and load replay fingerprints for Layers 2+3
+    events_path = tick_dir / "events.jsonl"
+    fp_table = _build_replay_fingerprints(ticks, events_path)
+    if fp_table:
+        goal_detector.load_replay_fingerprints(fp_table)
+
+    tick_counter = 0
+
     # Feed ticks
     for tick in ticks:
-        tick_ts = tick.get("_ts", 0.0)
-        wall_ts = tick_ts + clock_offset
+        tick_counter += 1
+        if ticks_have_p_kalshi:
+            model.p_kalshi = tick["p_kalshi"]
+        else:
+            tick_ts = tick.get("_ts", 0.0)
+            wall_ts = tick_ts + clock_offset
+            model.p_kalshi = ob_player.advance_to(wall_ts)
 
-        # Advance orderbook to this tick's time
-        model.p_kalshi = ob_player.advance_to(wall_ts)
+        # Update fingerprints for current score (replay mode)
+        current_score = tuple(tick.get("score", [0, 0]))
+        await goal_detector.update_fingerprints(
+            current_score=current_score,
+        )
+
+        # Layers 1-3: detect spikes, match fingerprints, infer goals
+        detection = goal_detector.process_tick(model.p_kalshi, tick_counter)
 
         # Convert and enqueue
         payload = _tick_to_payload(tick)
+
+        # Apply detection results
+        if detection.inferred_P_model is not None:
+            # Layer 3 confirmed: trade on inferred P_model
+            payload = payload.model_copy(
+                update={"P_model": detection.inferred_P_model, "ob_freeze": False}
+            )
+        elif detection.suppress_entries:
+            # Layer 1 active: suppress normal entries
+            payload = payload.model_copy(
+                update={"ob_freeze": True, "order_allowed": False}
+            )
+
         await phase4_queue.put(payload)
 
         # Yield to let execution_loop process

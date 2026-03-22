@@ -158,6 +158,25 @@ def test_generate_signals_filters_below_threshold():
     assert len(signals) == 0
 
 
+def test_generate_signals_post_goal_edge_passes():
+    """Post-goal scenario: high ekf_P + high mu, but 8% edge should still trade."""
+    payload = _make_payload(home_win=0.81, ekf_P_H=0.25, mu_H=1.5)
+    p_kalshi = {"home_win": 0.73}
+    tickers = {"home_win": "TICKER-HOME"}
+    signals = generate_signals(payload, p_kalshi, tickers)
+    home_signals = [s for s in signals if s.market_type == "home_win"]
+    assert len(home_signals) == 1
+    assert home_signals[0].direction == "BUY_YES"
+    assert home_signals[0].EV == pytest.approx(0.08, abs=1e-9)
+
+
+def test_dynamic_threshold_capped_post_goal():
+    """Sigma_model cap prevents threshold from exceeding ~4.5%."""
+    # Without cap this would give theta ~0.17; with cap ~0.045
+    theta = compute_dynamic_threshold(0.50, 0.003, 0.25, 1.5)
+    assert theta < 0.06  # well below the uncapped ~0.17
+
+
 def test_generate_signals_produces_signal():
     payload = _make_payload(home_win=0.70, ekf_P_H=0.05, mu_H=0.5)
     p_kalshi = {"home_win": 0.50}

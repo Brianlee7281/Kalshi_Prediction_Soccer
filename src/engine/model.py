@@ -140,6 +140,14 @@ class LiveMatchModel:
     # v5 SurpriseScore
     surprise_score: float = 0.0
 
+    # v5 Goal detection (3-layer phantom edge guard + fingerprint matching)
+    goal_detector: object | None = None  # GoalDetector, typed as object to avoid circular import
+
+    # v5 Dual-source score validation (Goalserve + Kalshi)
+    goalserve_score: tuple[int, int] = (0, 0)
+    goalserve_last_poll_ts: float = 0.0
+    score_mismatch_since: float | None = None
+
     @classmethod
     def from_phase2_result(
         cls, result: Phase2Result, params: dict

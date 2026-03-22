@@ -16,14 +16,26 @@ from src.execution.signal_generator import _get_market_ekf_P, _get_market_mu
 log = structlog.get_logger("kelly_sizer")
 
 
-def compute_kelly_fraction(p_model: float, p_kalshi: float) -> float:
-    """Raw Kelly fraction: f* = (b·p - q) / b."""
+def cost_per_contract(p_kalshi: float, direction: str) -> float:
+    """Cost to buy one contract: P_kalshi for YES, 1-P_kalshi for NO."""
+    return p_kalshi if direction == "BUY_YES" else 1.0 - p_kalshi
+
+
+def compute_kelly_fraction(
+    p_model: float, p_kalshi: float, direction: str = "BUY_YES"
+) -> float:
+    """Raw Kelly fraction: f* = (b*p_win - q) / b, direction-aware."""
     if p_kalshi <= 0 or p_kalshi >= 1:
         return 0.0
 
-    b = (1.0 / p_kalshi) - 1.0
-    q = 1.0 - p_model
-    f_star = (b * p_model - q) / b
+    if direction == "BUY_YES":
+        b = (1.0 / p_kalshi) - 1.0
+        p_win = p_model
+    else:
+        b = p_kalshi / (1.0 - p_kalshi)
+        p_win = 1.0 - p_model
+
+    f_star = (b * p_win - (1.0 - p_win)) / b
     return max(0.0, f_star)
 
 
@@ -34,6 +46,7 @@ def compute_sigma_p(p_hat: float, ekf_P: float, mu_market: float) -> float:
 
     sigma_mc_sq = p_hat * (1 - p_hat) / CONFIG.N_MC
     sigma_model_sq = ekf_P * (p_hat * (1 - p_hat) * mu_market) ** 2
+    sigma_model_sq = min(sigma_model_sq, CONFIG.SIGMA_MODEL_CAP ** 2)
     return sqrt(sigma_mc_sq + sigma_model_sq)
 
 
@@ -56,7 +69,7 @@ def apply_surprise_multiplier(f_shrunk: float, surprise_score: float) -> float:
 
 def size_position(signal: Signal, payload: TickPayload, bankroll: float) -> Signal:
     """Size a signal into a tradeable position with risk caps applied."""
-    f_star = compute_kelly_fraction(signal.P_model, signal.P_kalshi)
+    f_star = compute_kelly_fraction(signal.P_model, signal.P_kalshi, signal.direction)
 
     mu_market = _get_market_mu(signal.market_type, payload.mu_H, payload.mu_A)
     ekf_P = _get_market_ekf_P(signal.market_type, payload.ekf_P_H, payload.ekf_P_A)
@@ -73,7 +86,8 @@ def size_position(signal: Signal, payload: TickPayload, bankroll: float) -> Sign
     dollar_amount = min(dollar_amount, CONFIG.PER_ORDER_CAP)
     dollar_amount = min(dollar_amount, CONFIG.PER_MATCH_CAP_FRAC * bankroll)
 
-    contracts = int(dollar_amount / signal.P_kalshi) if signal.P_kalshi > 0 else 0
+    cpc = cost_per_contract(signal.P_kalshi, signal.direction)
+    contracts = int(dollar_amount / cpc) if cpc > 0 else 0
 
     updated = signal.model_copy(
         update={

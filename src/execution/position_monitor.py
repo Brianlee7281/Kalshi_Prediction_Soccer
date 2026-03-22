@@ -18,7 +18,7 @@ from src.common.types import (
     TickPayload,
 )
 from src.execution.config import CONFIG
-from src.execution.kelly_sizer import compute_kelly_fraction
+from src.execution.kelly_sizer import compute_kelly_fraction, cost_per_contract
 from src.execution.signal_generator import (
     _get_market_ekf_P,
     _get_market_mu,
@@ -42,7 +42,8 @@ class PositionTracker:
         self.cooldown_after_exit = cooldown_after_exit
 
     def add_position(
-        self, signal: Signal, fill: FillResult, tick: int, t: float
+        self, signal: Signal, fill: FillResult, tick: int, t: float,
+        reservation_id: int | None = None,
     ) -> Position:
         """Create and store a new position from a filled signal."""
         if signal.direction == "BUY_YES":
@@ -61,6 +62,7 @@ class PositionTracker:
             entry_tick=tick,
             entry_t=t,
             is_paper=(fill.status == "paper"),
+            reservation_id=reservation_id,
         )
         self.open_positions[position.id] = position
         log.info(
@@ -162,8 +164,9 @@ class PositionTracker:
 
                 # Trigger 3 — POSITION_TRIM
                 if decision is None and p_k > 0:
-                    kelly_frac = compute_kelly_fraction(p_model, p_k)
-                    kelly_optimal = max(1, int(kelly_frac * 10000.0 / p_k))
+                    kelly_frac = compute_kelly_fraction(p_model, p_k, position.direction)
+                    cpc = cost_per_contract(p_k, position.direction)
+                    kelly_optimal = max(1, int(kelly_frac * 10000.0 / cpc))
                     if position.quantity > 2 * kelly_optimal:
                         contracts_to_exit = position.quantity - kelly_optimal
                         decision = ExitDecision(
