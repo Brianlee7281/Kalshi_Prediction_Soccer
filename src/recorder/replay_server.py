@@ -1,15 +1,15 @@
 """ReplayServer — replays recorded JSONL data as mock HTTP/WS endpoints.
 
-Reads JSONL files from a latency recording directory and serves them at
+Reads JSONL files from a recording directory and serves them at
 configurable speed (1x, 10x, 100x real-time) for offline development
 and testing.
 
-Data sources (from data/latency/{match}/):
-    kalshi_live.jsonl   → HTTP endpoint (match state: goals, periods, scores)
-    kalshi.jsonl        → WS endpoint (orderbook snapshots + deltas)
-    odds_api.jsonl      → WS endpoint (bookmaker odds updates)
+Data sources (from data/recordings/{match}/):
+    kalshi_live_data.jsonl  → HTTP endpoint (match state: goals, periods, scores)
+    kalshi_ob.jsonl         → WS endpoint (orderbook snapshots + deltas)
+    odds_api.jsonl          → WS endpoint (bookmaker odds updates)
 
-Timestamp field: _ts_mono (monotonic seconds from recording start).
+Timestamp field: _ts (monotonic seconds from recording start).
 
 Synchronization: The HTTP poller is the master clock. Each poll advances
 ``_replay_ts`` to the current record's timestamp.  The Kalshi WS handler
@@ -29,11 +29,11 @@ from src.common.logging import get_logger
 
 logger = get_logger("recorder.replay_server")
 
-_TS_FIELDS = {"_ts_mono", "_ts_wall", "_utc"}
+_TS_FIELDS = {"_ts"}
 
 
 def _load_jsonl(path: Path) -> list[dict]:
-    """Load all records from a JSONL file, sorted by _ts_mono."""
+    """Load all records from a JSONL file, sorted by _ts."""
     if not path.exists():
         return []
     records: list[dict] = []
@@ -42,18 +42,18 @@ def _load_jsonl(path: Path) -> list[dict]:
             line = line.strip()
             if line:
                 records.append(json.loads(line))
-    records.sort(key=lambda r: r.get("_ts_mono", r.get("ts_mono", 0.0)))
+    records.sort(key=lambda r: r.get("_ts", 0.0))
     return records
 
 
 def _strip_ts(record: dict) -> dict:
-    """Remove internal timestamp fields before serving to clients."""
+    """Remove _ts timestamp field before serving to clients."""
     return {k: v for k, v in record.items() if k not in _TS_FIELDS}
 
 
 def _get_ts(record: dict) -> float:
     """Extract monotonic timestamp from a record."""
-    return record.get("_ts_mono", record.get("ts_mono", 0.0))
+    return record.get("_ts", 0.0)
 
 
 def _matchstate_to_api_response(record: dict) -> dict:
@@ -107,8 +107,8 @@ class ReplayServer:
         self.speed = speed
 
         # Load recorded data
-        self.kalshi_live_records = _load_jsonl(self.recording_dir / "kalshi_live.jsonl")
-        self.kalshi_ob_records = _load_jsonl(self.recording_dir / "kalshi.jsonl")
+        self.kalshi_live_records = _load_jsonl(self.recording_dir / "kalshi_live_data.jsonl")
+        self.kalshi_ob_records = _load_jsonl(self.recording_dir / "kalshi_ob.jsonl")
         self.odds_api_records = _load_jsonl(self.recording_dir / "odds_api.jsonl")
 
         # Pre-serialize kalshi OB records: list of (ts, json_str) tuples.

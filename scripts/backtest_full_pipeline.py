@@ -2,7 +2,7 @@
 """Full pipeline backtest: Phase 1→2→3→4 on recorded matches.
 
 Runs end-to-end MMPP v5 pipeline in PAPER mode. Uses REAL recorded Kalshi
-orderbook data from data/latency/{match_id}/kalshi.jsonl by default.
+orderbook data from data/recordings/{match_id}/kalshi_ob.jsonl by default.
 Falls back to KalshiPriceSimulator with --use-simulator.
 
 Usage:
@@ -447,9 +447,9 @@ def backtest_single_match(
 ) -> MatchBacktestResult | None:
     """Run full Phase 1→2→3→4 pipeline on one recorded match.
 
-    Uses real Kalshi orderbook data from kalshi.jsonl when available.
+    Uses real Kalshi orderbook data from kalshi_ob.jsonl when available.
     Falls back to KalshiPriceSimulator when use_simulator=True or no
-    kalshi.jsonl exists.
+    kalshi_ob.jsonl exists.
     """
     built = build_model_from_data(data_dir, params)
     if built is None:
@@ -482,7 +482,7 @@ def backtest_single_match(
     bankroll = initial_bankroll
 
     # ── Kalshi price source: real data or simulator ───────────────
-    kalshi_jsonl = data_dir / "kalshi.jsonl"
+    kalshi_jsonl = data_dir / "kalshi_ob.jsonl"
     kalshi_replay: KalshiOrderbookReplay | None = None
     kalshi_sim: KalshiPriceSimulator | None = None
 
@@ -1591,7 +1591,7 @@ def _run_lag_analysis(match_dirs: list[Path]) -> None:
     for match_dir in match_dirs:
         meta_path = match_dir / "metadata.json"
         events_path = match_dir / "events.jsonl"
-        kalshi_path = match_dir / "kalshi.jsonl"
+        kalshi_path = match_dir / "kalshi_ob.jsonl"
         if not all(p.exists() for p in [meta_path, events_path, kalshi_path]):
             continue
 
@@ -1745,9 +1745,9 @@ def main() -> None:
     if args.matches:
         match_dirs = [Path(m) for m in args.matches]
     else:
-        data_dir = PROJECT_ROOT / "data" / "latency"
+        data_dir = PROJECT_ROOT / "data" / "recordings"
         if not data_dir.exists():
-            print("ERROR: data/latency/ not found")
+            print("ERROR: data/recordings/ not found")
             sys.exit(1)
         match_dirs = sorted(
             [

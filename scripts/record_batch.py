@@ -95,23 +95,42 @@ async def _discover_matches(
 
 def _print_discovered(all_matches: list[dict]) -> None:
     """Print a table of discovered matches to stdout."""
-    et_tz = ZoneInfo("America/New_York")
-    now = datetime.now(et_tz)
+    # US Eastern: UTC-4 (EDT, Mar-Nov) or UTC-5 (EST, Nov-Mar)
+    # Simple DST rule: 2nd Sunday of March to 1st Sunday of November
+    def _is_edt(dt_utc: datetime) -> bool:
+        y = dt_utc.year
+        # 2nd Sunday of March
+        mar1 = datetime(y, 3, 1, tzinfo=timezone.utc)
+        dst_start = mar1 + timedelta(days=(6 - mar1.weekday()) % 7 + 7)
+        # 1st Sunday of November
+        nov1 = datetime(y, 11, 1, tzinfo=timezone.utc)
+        dst_end = nov1 + timedelta(days=(6 - nov1.weekday()) % 7)
+        return dst_start <= dt_utc < dst_end
+
+    now_utc = datetime.now(timezone.utc)
+    et_offset = timedelta(hours=-4) if _is_edt(now_utc) else timedelta(hours=-5)
+    et_tz = timezone(et_offset)
+    now = now_utc.astimezone(et_tz)
     today_str = now.strftime("%Y-%m-%d")
+    tz_label = "EDT" if _is_edt(now_utc) else "EST"
 
     lines: list[str] = []
     lines.append(f"\n{'='*75}")
     lines.append(f"  Open Kalshi Soccer Markets  ({today_str})")
     lines.append(f"{'='*75}")
-    lines.append(f"  {'League':<10} {'Kickoff (ET)':<20} {'Match':<25} {'Event Ticker'}")
+    lines.append(f"  {'League':<10} {'Kickoff~(' + tz_label + ')':<20} {'Match':<25} {'Event Ticker'}")
     lines.append(f"  {'-'*72}")
 
     today_count = 0
     for m in all_matches:
         exp = m["expected_expiration_time"]
-        # Parse and convert to Eastern Time
+        # Kalshi expected_expiration_time ≈ kickoff + 3h (post-match settlement).
+        # Subtract 3h to estimate kickoff.
         try:
-            dt = datetime.fromisoformat(exp.replace("Z", "+00:00")).astimezone(et_tz)
+            dt_utc = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+            dt_utc -= timedelta(hours=3)  # estimate kickoff from expiration
+            dt_offset = timedelta(hours=-4) if _is_edt(dt_utc) else timedelta(hours=-5)
+            dt = dt_utc.astimezone(timezone(dt_offset))
             kickoff_str = dt.strftime("%Y-%m-%d %H:%M")
             is_today = dt.strftime("%Y-%m-%d") == today_str
         except (ValueError, AttributeError):

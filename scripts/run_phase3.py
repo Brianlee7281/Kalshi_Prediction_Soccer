@@ -1,11 +1,11 @@
 """Run Phase 3 engine against live data or a recorded replay.
 
 Usage:
-  PYTHONPATH=. python scripts/run_phase3.py --match-id 12345 --league EPL          # live
-  PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN        # replay
-  PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN --speed 10  # 10x
-  PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN --trade # paper trade
-  PYTHONPATH=. python scripts/run_phase3.py --replay data/latency/KXEPLGAME-26MAR20BOUMUN --trade --bankroll 5000
+  PYTHONPATH=. python scripts/run_phase3.py --match-id KXEPLGAME-26MAR22NEWSUN --league EPL          # live
+  PYTHONPATH=. python scripts/run_phase3.py --replay data/recordings/KXEPLGAME-26MAR20BOUMUN        # replay
+  PYTHONPATH=. python scripts/run_phase3.py --replay data/recordings/KXEPLGAME-26MAR20BOUMUN --speed 10  # 10x
+  PYTHONPATH=. python scripts/run_phase3.py --replay data/recordings/KXEPLGAME-26MAR20BOUMUN --trade # paper trade
+  PYTHONPATH=. python scripts/run_phase3.py --replay data/recordings/KXEPLGAME-26MAR20BOUMUN --trade --bankroll 5000
   PYTHONPATH=. python scripts/run_phase3.py --tick-replay data/recordings/KXEPLGAME-26MAR20BOUMUN --bankroll 5000
 """
 
@@ -169,9 +169,9 @@ def _extract_kalshi_prematch_odds(
 
     Returns MarketProbs with home_win/draw/away_win, or None if data missing.
     """
-    ob_path = replay_dir / "kalshi.jsonl"
+    ob_path = replay_dir / "kalshi_ob.jsonl"
     if not ob_path.exists():
-        log.warning("kalshi_ob_file_not_found", path=str(ob_path))
+        log.warning("kalshi_ob_file_not_found", path=str(replay_dir))
         return None
 
     # Reverse map: ticker string → market type

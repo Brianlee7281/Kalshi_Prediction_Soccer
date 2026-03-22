@@ -1,7 +1,7 @@
 """Replays recorded Kalshi orderbook data to provide real P_kalshi.
 
 Maintains a running orderbook state from snapshots + deltas recorded in
-``data/latency/{match_id}/kalshi.jsonl``.  Provides mid-price and
+``data/recordings/{match_id}/kalshi_ob.jsonl``.  Provides mid-price and
 execution price (with real spread from book) at any wall-clock time.
 
 Mid-price logic matches ``src/engine/kalshi_ob_sync.py``:

@@ -7,7 +7,7 @@ Usage:
     # Tick replay (source data in separate directories):
     python scripts/plot_replay.py data/tick_replay_results/KXEPLGAME-26MAR20BOUMUN \
         --ticks data/recordings/KXEPLGAME-26MAR20BOUMUN \
-        --orderbook data/latency/KXEPLGAME-26MAR20BOUMUN
+        --orderbook data/recordings/KXEPLGAME-26MAR20BOUMUN
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _load_metadata(path: Path) -> dict:
 
 
 def _compute_clock_offset(tick_dir: Path) -> float:
-    """Compute offset between recordings _ts and latency _ts_wall.
+    """Compute offset between recordings _ts and recording _ts_wall.
 
     Uses goal events which have both _ts (recordings monotonic) and
     occurence_ts (Kalshi wall clock / unix epoch).
@@ -72,7 +72,7 @@ def _reconstruct_ob_from_raw(
     clock_offset: float,
     ticks: list[dict],
 ) -> list[dict]:
-    """Reconstruct {_ts, ticker, mid} records from raw latency kalshi.jsonl.
+    """Reconstruct {_ts, ticker, mid} records from raw kalshi_ob.jsonl.
 
     Uses _LocalBook to maintain orderbook state from snapshots + deltas.
     Maps wall clock to tick time using the clock offset:
@@ -279,10 +279,10 @@ def plot_replay(
         events = _load_jsonl(replay_dir / "events.jsonl")
 
     # Load orderbook: from --orderbook dir (raw, needs reconstruction) or replay_dir
-    if orderbook_dir and (orderbook_dir / "kalshi.jsonl").exists():
+    if orderbook_dir and (orderbook_dir / "kalshi_ob.jsonl").exists():
         clock_offset = _compute_clock_offset(tick_source)
         ob_records = _reconstruct_ob_from_raw(
-            orderbook_dir / "kalshi.jsonl",
+            orderbook_dir / "kalshi_ob.jsonl",
             clock_offset,
             ticks,
         )
@@ -505,7 +505,7 @@ def main() -> None:
     parser.add_argument("--ticks", type=str, default=None,
                         help="Path to recordings dir with ticks.jsonl (for tick replay)")
     parser.add_argument("--orderbook", type=str, default=None,
-                        help="Path to latency dir with kalshi.jsonl (for tick replay)")
+                        help="Path to recordings dir with kalshi_ob.jsonl (for tick replay)")
     args = parser.parse_args()
     plot_replay(
         Path(args.replay_dir),

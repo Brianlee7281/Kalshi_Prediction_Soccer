@@ -11,9 +11,9 @@ Reconstructs:
   3. Gap analysis: where model diverges most from market
 
 Data sources:
-  - data/latency/4190023/kalshi.jsonl (orderbook snapshots + deltas)
-  - data/latency/4190023/events.jsonl (goals with exact timestamps)
-  - data/latency/4190023/goalserve.jsonl (minute-level status + score)
+  - data/recordings/4190023/kalshi_ob.jsonl (orderbook snapshots + deltas)
+  - data/recordings/4190023/events.jsonl (goals with exact timestamps)
+  - data/recordings/4190023/goalserve.jsonl (minute-level status + score)
   - MMPP model with EPL-average default params (Phase 1 not yet trained)
 
 Match: Brentford 2-2 Wolves, 2026-03-16
@@ -39,7 +39,7 @@ from src.engine.strength_updater import InPlayStrengthUpdater
 # --- Config -------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).parent.parent
-MATCH_DIR = PROJECT_ROOT / "data" / "latency" / "4190023"
+MATCH_DIR = PROJECT_ROOT / "data" / "recordings" / "4190023"
 BRE_TICKER_SUFFIX = "-BRE"  # Brentford home win market (suffix to avoid matching BREWOL event)
 
 # MMPP default params -- EPL-calibrated (8-period basis)
@@ -164,7 +164,7 @@ def build_kalshi_mid_timeline(
     no_book: dict[str, float] = {}
     tl: list[tuple[float, float, float, float]] = []
 
-    with open(match_dir / "kalshi.jsonl") as f:
+    with open(match_dir / "kalshi_ob.jsonl") as f:
         for line in f:
             data = json.loads(line)
             msg = data.get("msg", data)

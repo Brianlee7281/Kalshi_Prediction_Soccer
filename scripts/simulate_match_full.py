@@ -51,7 +51,7 @@ from src.prematch.phase2_pipeline import (
 )
 
 # ── Match data ────────────────────────────────────────────────────
-DATA_DIR = PROJECT_ROOT / "data" / "latency" / "KXEPLGAME-26MAR20BOUMUN"
+DATA_DIR = PROJECT_ROOT / "data" / "recordings" / "KXEPLGAME-26MAR20BOUMUN"
 
 # ── Calibrated EPL parameters ────────────────────────────────────
 PARAMS: dict = {
@@ -216,16 +216,16 @@ def run_mc(model: LiveMatchModel) -> tuple[MarketProbs, MarketProbs]:
     return P, sigma
 
 
-# ── Load match timeline from kalshi_live.jsonl ────────────────────
+# ── Load match timeline from kalshi_live_data.jsonl ────────────────────
 
 def load_timeline(data_dir: Path) -> list[dict]:
-    """Load kalshi_live.jsonl, sample every ~3 seconds for tick simulation.
+    """Load kalshi_live_data.jsonl, sample every ~3 seconds for tick simulation.
 
     Returns one state per ~3s of wall time during 'live' status,
     giving ~1800 ticks for a 90-minute match (comparable to the
     real 1Hz tick loop after 3:1 downsampling).
     """
-    path = data_dir / "kalshi_live.jsonl"
+    path = data_dir / "kalshi_live_data.jsonl"
     states: list[dict] = []
     last_wall = 0.0
     with open(path) as f:
@@ -249,7 +249,7 @@ def load_timeline(data_dir: Path) -> list[dict]:
 def load_kalshi_initial_prices(data_dir: Path) -> dict[str, float]:
     """Get initial mid-prices from Kalshi orderbook snapshots."""
     prices: dict[str, float] = {}
-    path = data_dir / "kalshi.jsonl"
+    path = data_dir / "kalshi_ob.jsonl"
     with open(path) as f:
         for line in f:
             d = json.loads(line)

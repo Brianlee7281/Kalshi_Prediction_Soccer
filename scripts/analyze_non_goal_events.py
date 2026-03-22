@@ -9,7 +9,7 @@ Five analyses:
 5. Kalshi spread analysis (is the market tradeable at all?)
 
 Usage:
-  PYTHONPATH=. python scripts/analyze_non_goal_events.py data/latency/4190023 --event-id 69385814
+  PYTHONPATH=. python scripts/analyze_non_goal_events.py data/recordings/4190023 --event-id 69385814
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def build_kalshi_book_timeline(
     no_bk: dict[str, float] = {}
     tl: list[tuple[float, float, float]] = []
 
-    with open(md / "kalshi.jsonl") as f:
+    with open(md / "kalshi_ob.jsonl") as f:
         for line in f:
             d = json.loads(line)
             msg = d.get("msg", d)

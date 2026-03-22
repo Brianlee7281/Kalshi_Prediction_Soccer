@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Post-hoc latency analyzer for recorded match data.
 
-Reads raw JSONL from data/latency/{match_id}/ and computes cross-market
+Reads raw JSONL from data/recordings/{match_id}/ and computes cross-market
 lag by retroactively detecting price movements from each source around
 Goalserve-detected goals.
 
 Usage:
-  PYTHONPATH=. python scripts/analyze_latency.py data/latency/4190023
+  PYTHONPATH=. python scripts/analyze_latency.py data/recordings/4190023
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def find_match_event_ids(
         return candidate_ids
 
     # Get Kalshi pre-match best_yes as reference
-    kalshi_file = match_dir / "kalshi.jsonl"
+    kalshi_file = match_dir / "kalshi_ob.jsonl"
     kalshi_ref = None
     if kalshi_file.exists():
         with open(kalshi_file) as f:
@@ -175,7 +175,7 @@ def build_kalshi_price_timeline(
     yes_book: dict[str, float] = {}
     timeline = []
 
-    with open(match_dir / "kalshi.jsonl") as f:
+    with open(match_dir / "kalshi_ob.jsonl") as f:
         for line in f:
             data = json.loads(line)
             msg = data.get("msg", data)

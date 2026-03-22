@@ -21,7 +21,7 @@ from pathlib import Path
 
 # ─── Configuration ────────────────────────────────────────────────────
 
-LATENCY_DIR = Path("data/latency")
+RECORDINGS_DIR = Path("data/recordings")
 OUTPUT_DIR = Path("data/analysis/goal_adjustment_curve")
 
 # Timestamps relative to t=0 (first Kalshi move) at which to sample prices
@@ -147,7 +147,7 @@ def build_all_orderbook_timelines(
     # Map ticker substring → role for fast lookup
     substr_to_role: dict[str, str] = {v: k for k, v in ticker_substrs.items()}
 
-    with open(match_dir / "kalshi.jsonl") as f:
+    with open(match_dir / "kalshi_ob.jsonl") as f:
         for line in f:
             data = json.loads(line)
             msg = data.get("msg", data)
@@ -794,13 +794,13 @@ def print_verdict(
 
 
 def main() -> None:
-    if not LATENCY_DIR.exists():
-        print(f"ERROR: {LATENCY_DIR} does not exist")
+    if not RECORDINGS_DIR.exists():
+        print(f"ERROR: {RECORDINGS_DIR} does not exist")
         sys.exit(1)
 
     match_dirs = sorted(
-        p for p in LATENCY_DIR.iterdir()
-        if p.is_dir() and (p / "kalshi.jsonl").exists()
+        p for p in RECORDINGS_DIR.iterdir()
+        if p.is_dir() and (p / "kalshi_ob.jsonl").exists()
     )
 
     print("=" * 70)

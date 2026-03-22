@@ -34,7 +34,7 @@ def main() -> None:
 
     # Load original metadata for actual result
     match_id = result_dir.name
-    orig_meta_path = Path("data/latency") / match_id / "metadata.json"
+    orig_meta_path = Path("data/recordings") / match_id / "metadata.json"
     actual_score = None
     home_team = "Home"
     away_team = "Away"

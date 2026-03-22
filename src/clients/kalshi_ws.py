@@ -183,10 +183,10 @@ class KalshiWSClient:
 
                         if msg_type == "orderbook_snapshot" and on_orderbook:
                             ticker = msg.get("msg", {}).get("market_ticker", "")
-                            await on_orderbook(ticker, msg.get("msg", {}))
+                            await on_orderbook(ticker, msg)
                         elif msg_type == "orderbook_delta" and on_orderbook:
                             ticker = msg.get("msg", {}).get("market_ticker", "")
-                            await on_orderbook(ticker, msg.get("msg", {}))
+                            await on_orderbook(ticker, msg)
                         elif msg_type == "trade" and on_trade:
                             ticker = msg.get("msg", {}).get("market_ticker", "")
                             await on_trade(ticker, msg.get("msg", {}))

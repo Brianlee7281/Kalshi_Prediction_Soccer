@@ -18,7 +18,7 @@ Match: Brentford 2-2 Wolves, 2026-03-16
 Goals: min 22 (1-0 H), min 37 (2-0 H), min 44 (2-1 A), min 77 (2-2 A)
 
 Usage:
-  PYTHONPATH=. python scripts/analyze_bias.py data/latency/4190023
+  PYTHONPATH=. python scripts/analyze_bias.py data/recordings/4190023
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ def build_mid_timeline(
     no_book: dict[str, float] = {}
     tl: list[tuple[float, float]] = []
 
-    with open(match_dir / "kalshi.jsonl") as f:
+    with open(match_dir / "kalshi_ob.jsonl") as f:
         for line in f:
             data = json.loads(line)
             msg = data.get("msg", data)
@@ -223,7 +223,7 @@ def main() -> None:
     if len(sys.argv) > 1:
         match_dir = Path(sys.argv[1])
     else:
-        match_dir = Path(__file__).parent.parent / "data" / "latency" / "4190023"
+        match_dir = Path(__file__).parent.parent / "data" / "recordings" / "4190023"
 
     print("=" * 78)
     print("BEHAVIORAL BIAS TEST: Brentford 2-2 Wolves (2026-03-16)")

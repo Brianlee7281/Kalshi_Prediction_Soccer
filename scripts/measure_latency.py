@@ -11,12 +11,12 @@ feed reports a goal/event?
 
 Usage:
   PYTHONPATH=. python scripts/measure_latency.py --event-ticker KXSERIEAGAME-25MAR23-JUVROM --league SerieA
-  PYTHONPATH=. python scripts/measure_latency.py --analyze data/latency/KXSERIEAGAME-25MAR23-JUVROM
+  PYTHONPATH=. python scripts/measure_latency.py --analyze data/recordings/KXSERIEAGAME-25MAR23-JUVROM
 
-Output: data/latency/{event_ticker}/
-  odds_api.jsonl       — raw Odds-API WS messages
-  kalshi_live.jsonl    — Kalshi live data poll responses (every 1s)
-  kalshi.jsonl         — raw Kalshi WS orderbook messages
+Output: data/recordings/{event_ticker}/
+  odds_api.jsonl           — raw Odds-API WS messages
+  kalshi_live_data.jsonl   — Kalshi live data poll responses (every 1s)
+  kalshi_ob.jsonl          — raw Kalshi WS orderbook messages
   events.jsonl         — detected events with timestamps from all sources
   latency_report.json  — computed cross-market lag per event
 """
@@ -59,7 +59,7 @@ LEAGUE_PREFIXES = {
 ODDS_MOVE_THRESHOLD = 0.03   # 3% implied probability change
 KALSHI_MOVE_THRESHOLD = 0.03  # 3¢ best-ask change
 
-OUTPUT_DIR = Path("data/latency")
+OUTPUT_DIR = Path("data/recordings")
 
 _POLL_INTERVAL_S = 1.0
 
@@ -153,7 +153,7 @@ class LatencyTracker:
 
     def record_odds_api(self, message: dict) -> None:
         mono, wall, utc = self._ts()
-        record = {"_ts_mono": mono - self._start_mono, "_ts_wall": wall, "_utc": utc, **message}
+        record = {"_ts": mono - self._start_mono, "_ts_wall": wall, "_utc": utc, **message}
         f = self._get_file("odds_api")
         f.write(json.dumps(record, default=str) + "\n")
         f.flush()
@@ -201,12 +201,12 @@ class LatencyTracker:
         """Record Kalshi live data poll and detect goals/period changes/red cards."""
         mono, wall, utc = self._ts()
         record = {
-            "_ts_mono": mono - self._start_mono,
+            "_ts": mono - self._start_mono,
             "_ts_wall": wall,
             "_utc": utc,
             **state.model_dump(),
         }
-        f = self._get_file("kalshi_live")
+        f = self._get_file("kalshi_live_data")
         f.write(json.dumps(record, default=str) + "\n")
         f.flush()
 
@@ -313,8 +313,8 @@ class LatencyTracker:
     def record_kalshi(self, message: dict) -> None:
         """Record Kalshi WS message and check for orderbook price movement."""
         mono, wall, utc = self._ts()
-        record = {"_ts_mono": mono - self._start_mono, "_ts_wall": wall, "_utc": utc, **message}
-        f = self._get_file("kalshi")
+        record = {"_ts": mono - self._start_mono, "_ts_wall": wall, "_utc": utc, **message}
+        f = self._get_file("kalshi_ob")
         f.write(json.dumps(record, default=str) + "\n")
         f.flush()
 
@@ -691,7 +691,7 @@ def analyze(match_dir: Path) -> None:
                 if line:
                     events.append(json.loads(line))
 
-    for name in ("odds_api", "kalshi_live", "kalshi"):
+    for name in ("odds_api", "kalshi_live_data", "kalshi_ob"):
         path = match_dir / f"{name}.jsonl"
         if path.exists():
             count = sum(1 for _ in open(path))

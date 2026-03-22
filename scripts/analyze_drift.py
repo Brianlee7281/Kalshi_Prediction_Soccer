@@ -6,7 +6,7 @@ ANALYSIS 2: Bookmaker suspension detection around goals — is there a tradeable
             window between suspension detection and Kalshi repricing?
 
 Usage:
-  PYTHONPATH=. python scripts/analyze_drift.py data/latency/4190023 --event-id 69385814
+  PYTHONPATH=. python scripts/analyze_drift.py data/recordings/4190023 --event-id 69385814
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ def build_kalshi_mid_timeline(
     no_book: dict[str, float] = {}
     tl: list[tuple[float, float, float, float]] = []
 
-    with open(match_dir / "kalshi.jsonl") as f:
+    with open(match_dir / "kalshi_ob.jsonl") as f:
         for line in f:
             data = json.loads(line)
             msg = data.get("msg", data)

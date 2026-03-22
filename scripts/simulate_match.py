@@ -3,7 +3,7 @@
 
 Pipes recorded match data through the existing MMPP v5 pipeline and prints
 diagnostic output at every stage. No external services needed — all data
-comes from JSONL files in data/latency/4190023/.
+comes from JSONL files in data/recordings/4190023/.
 
 Usage:
     PYTHONPATH=. python scripts/simulate_match.py
@@ -50,7 +50,7 @@ from src.prematch.phase2_pipeline import (
 )
 
 # ── Constants ─────────────────────────────────────────────────────
-DATA_DIR = PROJECT_ROOT / "data" / "latency" / "4190023"
+DATA_DIR = PROJECT_ROOT / "data" / "recordings" / "4190023"
 MC_N = 20_000  # simulations per pricing call (trade-off speed vs precision)
 
 # ──────────────────────────────────────────────────────────────────

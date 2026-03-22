@@ -1,4 +1,4 @@
-"""Tests for ReplayServer (latency recording format)."""
+"""Tests for ReplayServer (data/recordings/ format)."""
 
 from __future__ import annotations
 
@@ -12,59 +12,59 @@ from src.recorder.replay_server import ReplayServer, _load_jsonl
 
 
 def _create_recording(tmp_path: Path) -> Path:
-    """Create a minimal recording directory matching data/latency/ format."""
+    """Create a minimal recording directory matching data/recordings/ format."""
     rec_dir = tmp_path / "KXEPLGAME-26MAR20TEST"
     rec_dir.mkdir()
 
-    # kalshi_live.jsonl — 3 sequential poll responses (MatchState shape)
+    # kalshi_live_data.jsonl — 3 sequential poll responses (MatchState shape)
     live_records = [
         {
-            "_ts_mono": 0.5, "_ts_wall": 1000000.5, "_utc": "2026-03-20T18:00:00Z",
+            "_ts": 0.5,
             "status": "live", "half": "1st", "minute": 0, "stoppage": 0,
             "home_score": 0, "away_score": 0,
             "last_play_ts": None, "last_play_desc": None,
             "significant_events": [],
         },
         {
-            "_ts_mono": 1.5, "_ts_wall": 1000001.5, "_utc": "2026-03-20T18:00:01Z",
+            "_ts": 1.5,
             "status": "live", "half": "1st", "minute": 35, "stoppage": 0,
             "home_score": 1, "away_score": 0,
             "last_play_ts": 1000001, "last_play_desc": "Goal",
             "significant_events": [],
         },
         {
-            "_ts_mono": 2.5, "_ts_wall": 1000002.5, "_utc": "2026-03-20T18:00:02Z",
+            "_ts": 2.5,
             "status": "live", "half": "HT", "minute": 45, "stoppage": 0,
             "home_score": 1, "away_score": 0,
             "last_play_ts": None, "last_play_desc": None,
             "significant_events": [],
         },
     ]
-    with open(rec_dir / "kalshi_live.jsonl", "w", encoding="utf-8") as f:
+    with open(rec_dir / "kalshi_live_data.jsonl", "w", encoding="utf-8") as f:
         for r in live_records:
             f.write(json.dumps(r) + "\n")
 
-    # kalshi.jsonl — 2 orderbook messages
+    # kalshi_ob.jsonl — 2 orderbook messages
     ob_records = [
         {
-            "_ts_mono": 0.5, "_ts_wall": 1000000.5, "_utc": "2026-03-20T18:00:00Z",
+            "_ts": 0.5,
             "type": "orderbook_snapshot", "sid": 1, "seq": 1,
             "msg": {"market_ticker": "KXEPLGAME-26MAR20TEST-HOME", "yes": [[45, 100]]},
         },
         {
-            "_ts_mono": 1.0, "_ts_wall": 1000001.0, "_utc": "2026-03-20T18:00:01Z",
+            "_ts": 1.0,
             "type": "orderbook_delta", "sid": 1, "seq": 2,
             "msg": {"market_ticker": "KXEPLGAME-26MAR20TEST-HOME", "yes": [[47, 50]]},
         },
     ]
-    with open(rec_dir / "kalshi.jsonl", "w", encoding="utf-8") as f:
+    with open(rec_dir / "kalshi_ob.jsonl", "w", encoding="utf-8") as f:
         for r in ob_records:
             f.write(json.dumps(r) + "\n")
 
     # odds_api.jsonl — 1 update
     odds_records = [
         {
-            "_ts_mono": 1.0, "_ts_wall": 1000001.0, "_utc": "2026-03-20T18:00:01Z",
+            "_ts": 1.0,
             "type": "updated", "bookie": "Bet365",
             "markets": [{"name": "ML", "odds": [
                 {"name": "home", "price": 2.10},
@@ -90,7 +90,7 @@ def _create_recording(tmp_path: Path) -> Path:
 
 
 def test_replay_server_loads_recording(tmp_path: Path) -> None:
-    """ReplayServer loads all JSONL streams from latency format."""
+    """ReplayServer loads all JSONL streams from recording directory."""
     rec_dir = _create_recording(tmp_path)
     server = ReplayServer(rec_dir, speed=100.0)
 
@@ -98,9 +98,9 @@ def test_replay_server_loads_recording(tmp_path: Path) -> None:
     assert len(server.kalshi_ob_records) == 2
     assert len(server.odds_api_records) == 1
 
-    # Records sorted by _ts_mono
-    assert server.kalshi_live_records[0]["_ts_mono"] == 0.5
-    assert server.kalshi_live_records[2]["_ts_mono"] == 2.5
+    # Records sorted by _ts
+    assert server.kalshi_live_records[0]["_ts"] == 0.5
+    assert server.kalshi_live_records[2]["_ts"] == 2.5
 
     # Missing files handled gracefully
     missing = _load_jsonl(tmp_path / "nonexistent.jsonl")
@@ -142,8 +142,8 @@ async def test_replay_live_data_endpoint(tmp_path: Path) -> None:
                 assert details["half"] == "1st"
                 assert details["time"] == "0'"
                 assert details["home_same_game_score"] == 0
-                # No _ts_mono in response
-                assert "_ts_mono" not in json.dumps(data)
+                # No _ts in response
+                assert "_ts" not in json.dumps(data)
 
             # Second poll → minute 35, goal scored
             async with session.get(url) as resp:

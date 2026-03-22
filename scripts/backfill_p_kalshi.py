@@ -1,12 +1,12 @@
-"""Backfill p_kalshi into an existing ticks.jsonl using latency recording orderbook data.
+"""Backfill p_kalshi into an existing ticks.jsonl using recorded orderbook data.
 
 Joins recorded ticks (with correct P_model but no p_kalshi) to recorded orderbook
-data (from a separate latency recording of the same match) via match time.
+data (from a separate recording of the same match) via match time.
 
 Usage:
   PYTHONPATH=. python scripts/backfill_p_kalshi.py \
     --ticks data/recordings/KXEPLGAME-26MAR20BOUMUN/ticks.jsonl \
-    --latency-dir data/latency/KXEPLGAME-26MAR20BOUMUN
+    --recording-dir data/recordings/KXEPLGAME-26MAR20BOUMUN
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from src.execution.kalshi_replay import KalshiOrderbookReplay
 
 
 def _load_time_mapping(kalshi_live_path: Path) -> list[tuple[float, float]]:
-    """Build (match_t, wall_clock) mapping from kalshi_live.jsonl.
+    """Build (match_t, wall_clock) mapping from kalshi_live_data.jsonl.
 
     Only includes records where status == "live" (match in progress).
     Returns sorted by match_t.
@@ -75,19 +75,19 @@ def _match_t_to_wall_clock(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill p_kalshi into ticks.jsonl")
     parser.add_argument("--ticks", required=True, help="Path to ticks.jsonl")
-    parser.add_argument("--latency-dir", required=True,
-                        help="Path to latency recording dir (with kalshi.jsonl and kalshi_live.jsonl)")
+    parser.add_argument("--recording-dir", required=True,
+                        help="Path to recording dir (with kalshi_ob.jsonl and kalshi_live_data.jsonl)")
     parser.add_argument("--output", help="Output path (default: overwrite ticks.jsonl in-place)")
     args = parser.parse_args()
 
     ticks_path = Path(args.ticks)
-    latency_dir = Path(args.latency_dir)
+    recording_dir = Path(args.recording_dir)
     output_path = Path(args.output) if args.output else ticks_path
 
     # Load metadata for ticker mapping
-    meta_path = latency_dir / "metadata.json"
+    meta_path = recording_dir / "metadata.json"
     if not meta_path.exists():
-        print(f"ERROR: metadata.json not found in {latency_dir}", file=sys.stderr)
+        print(f"ERROR: metadata.json not found in {recording_dir}", file=sys.stderr)
         sys.exit(1)
     with open(meta_path) as f:
         metadata = json.load(f)
@@ -104,9 +104,9 @@ def main() -> None:
     print(f"Ticker mapping: {ticker_to_market}")
 
     # Step 1: Build match-time → wall-clock mapping
-    kalshi_live_path = latency_dir / "kalshi_live.jsonl"
+    kalshi_live_path = recording_dir / "kalshi_live_data.jsonl"
     if not kalshi_live_path.exists():
-        print(f"ERROR: kalshi_live.jsonl not found in {latency_dir}", file=sys.stderr)
+        print(f"ERROR: kalshi_live_data.jsonl not found in {recording_dir}", file=sys.stderr)
         sys.exit(1)
 
     time_mapping = _load_time_mapping(kalshi_live_path)
@@ -114,9 +114,9 @@ def main() -> None:
           f"match_t range [{time_mapping[0][0]:.1f}, {time_mapping[-1][0]:.1f}]")
 
     # Step 2: Load orderbook replay
-    kalshi_ob_path = latency_dir / "kalshi.jsonl"
+    kalshi_ob_path = recording_dir / "kalshi_ob.jsonl"
     if not kalshi_ob_path.exists():
-        print(f"ERROR: kalshi.jsonl not found in {latency_dir}", file=sys.stderr)
+        print(f"ERROR: kalshi_ob.jsonl not found in {recording_dir}", file=sys.stderr)
         sys.exit(1)
 
     ob_replay = KalshiOrderbookReplay(kalshi_ob_path, ticker_to_market)

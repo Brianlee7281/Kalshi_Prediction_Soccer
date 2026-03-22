@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Multi-match backtest: validate Phase 1->2->3 pipeline across recorded matches.
 
-Discovers all recorded matches in data/latency/, runs the full pipeline with
+Discovers all recorded matches in data/recordings/, runs the full pipeline with
 calibrated parameters, and prints per-match and aggregate accuracy metrics.
 
 Usage:
@@ -490,9 +490,9 @@ def _snap(model: LiveMatchModel, P: MarketProbs, t: float, event: str = "") -> d
 # -- Main ---------------------------------------------------------
 
 def main() -> None:
-    data_dir = PROJECT_ROOT / "data" / "latency"
+    data_dir = PROJECT_ROOT / "data" / "recordings"
     if not data_dir.exists():
-        print("ERROR: data/latency/ not found")
+        print("ERROR: data/recordings/ not found")
         sys.exit(1)
 
     match_dirs = sorted([

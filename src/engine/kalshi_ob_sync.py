@@ -97,8 +97,12 @@ async def kalshi_ob_sync(
     # Local orderbook per ticker
     books: dict[str, _LocalBook] = defaultdict(_LocalBook)
 
-    async def on_orderbook(ticker: str, data: dict) -> None:
+    async def on_orderbook(ticker: str, raw_msg: dict) -> None:
         """Process orderbook snapshot or delta → update local book → compute mid."""
+        # Extract payload — full envelope has {type, msg: {payload}};
+        # fallback to raw_msg itself for direct calls with just the payload.
+        data = raw_msg.get("msg", raw_msg)
+
         market_type = ticker_to_market.get(ticker)
         if market_type is None:
             return
@@ -136,10 +140,10 @@ async def kalshi_ob_sync(
             model.p_kalshi = {}
         model.p_kalshi[market_type] = mid
 
-        # Record if recorder attached
+        # Record full WS message (ReplayServer-compatible format)
         recorder = getattr(model, "recorder", None)
         if recorder is not None:
-            recorder.record_kalshi_ob({"ticker": ticker, "mid": mid})
+            recorder.record_kalshi_ob(raw_msg)
 
     async def on_trade(ticker: str, data: dict) -> None:
         """Log trade (no model update needed)."""

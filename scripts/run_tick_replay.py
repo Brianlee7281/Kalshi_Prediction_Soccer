@@ -8,10 +8,10 @@ No Phase 3 re-computation — uses the exact P_model values from the live run.
 Usage:
   PYTHONPATH=. python scripts/run_tick_replay.py \
       --ticks data/recordings/KXEPLGAME-26MAR20BOUMUN \
-      --orderbook data/latency/KXEPLGAME-26MAR20BOUMUN
+      --orderbook data/recordings/KXEPLGAME-26MAR20BOUMUN
   PYTHONPATH=. python scripts/run_tick_replay.py \
       --ticks data/recordings/KXEPLGAME-26MAR20BOUMUN \
-      --orderbook data/latency/KXEPLGAME-26MAR20BOUMUN \
+      --orderbook data/recordings/KXEPLGAME-26MAR20BOUMUN \
       --bankroll 5000
 """
 
@@ -53,7 +53,7 @@ def _load_ticks(tick_dir: Path) -> list[dict]:
 
 def _load_orderbook(ob_dir: Path) -> list[tuple[float, str, dict]]:
     """Load orderbook records as (ts_wall, type, msg) tuples."""
-    path = ob_dir / "kalshi.jsonl"
+    path = ob_dir / "kalshi_ob.jsonl"
     if not path.exists():
         log.error("orderbook_not_found", path=str(path))
         sys.exit(1)
@@ -73,7 +73,7 @@ def _load_orderbook(ob_dir: Path) -> list[tuple[float, str, dict]]:
 
 
 def _compute_clock_offset(tick_dir: Path) -> float:
-    """Compute the offset between recordings _ts and latency _ts_wall.
+    """Compute the offset between recordings _ts and recording _ts_wall.
 
     Uses goal events which have both _ts (recordings monotonic) and
     occurence_ts (Kalshi wall clock / unix epoch).
@@ -379,7 +379,7 @@ def main() -> None:
     parser.add_argument("--ticks", type=str, required=True,
                         help="Path to recordings directory (with ticks.jsonl)")
     parser.add_argument("--orderbook", type=str, required=True,
-                        help="Path to latency directory (with kalshi.jsonl)")
+                        help="Path to recordings directory (with kalshi_ob.jsonl)")
     parser.add_argument("--bankroll", type=float, default=10_000.0,
                         help="Starting bankroll (default: $10,000)")
     args = parser.parse_args()
