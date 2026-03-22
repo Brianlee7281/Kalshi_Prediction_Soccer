@@ -97,7 +97,7 @@ def _reconstruct_ob_from_raw(
             if not line:
                 continue
             r = json.loads(line)
-            ts_wall = r.get("_ts_wall", 0.0)
+            ts_wall = r.get("_ts_wall") or r.get("_ts", 0.0)
             rtype = r.get("type", "")
             msg = r.get("msg", {})
             ticker = msg.get("market_ticker", "")
@@ -258,6 +258,33 @@ def _build_kalshi_series(
     return result
 
 
+# ── Build P_kalshi from ticks (preferred source) ─────────────────
+
+def _build_kalshi_from_ticks(
+    ticks: list[dict],
+    markets: list[str],
+) -> dict[str, tuple[list[float], list[float]]] | None:
+    """Extract p_kalshi series directly from tick data.
+
+    Returns None if ticks don't contain p_kalshi.
+    """
+    if not ticks or "p_kalshi" not in ticks[0]:
+        return None
+
+    result: dict[str, tuple[list[float], list[float]]] = {}
+    for mt in markets:
+        times: list[float] = []
+        mids: list[float] = []
+        for tk in ticks:
+            pk = tk.get("p_kalshi", {})
+            if mt in pk:
+                times.append(tk.get("t", 0.0))
+                mids.append(pk[mt])
+        if times:
+            result[mt] = (times, mids)
+    return result if result else None
+
+
 # ── Main plot ────────────────────────────────────────────────────
 
 def plot_replay(
@@ -278,15 +305,18 @@ def plot_replay(
     if not events:
         events = _load_jsonl(replay_dir / "events.jsonl")
 
-    # Load orderbook: from --orderbook dir (raw, needs reconstruction) or replay_dir
-    if orderbook_dir and (orderbook_dir / "kalshi_ob.jsonl").exists():
+    # Load orderbook: prefer p_kalshi from ticks, fall back to raw OB reconstruction
+    kalshi_from_ticks = _build_kalshi_from_ticks(ticks, ["home_win", "draw", "away_win"])
+    if kalshi_from_ticks is not None:
+        ob_records = []
+        ob_ts_is_match_time = False
+    elif orderbook_dir and (orderbook_dir / "kalshi_ob.jsonl").exists():
         clock_offset = _compute_clock_offset(tick_source)
         ob_records = _reconstruct_ob_from_raw(
             orderbook_dir / "kalshi_ob.jsonl",
             clock_offset,
             ticks,
         )
-        # Reconstructed _ts is in recordings clock (same as ticks._ts)
         ob_ts_is_match_time = False
     else:
         ob_records = _load_jsonl(replay_dir / "kalshi_ob.jsonl")
@@ -310,6 +340,21 @@ def plot_replay(
 
     # Ticker mapping
     ticker_to_market = _map_tickers(ob_records, ticks, trades)
+    if not ticker_to_market and kalshi_from_ticks is not None:
+        # When using p_kalshi from ticks, derive mapping from metadata/trades
+        raw_tickers = metadata.get("kalshi_tickers", [])
+        event_ticker = metadata.get("event_ticker", metadata.get("match_id", ""))
+        if raw_tickers and event_ticker:
+            from scripts.run_tick_replay import _tickers_list_to_dict
+            kalshi_tickers = _tickers_list_to_dict(event_ticker, raw_tickers)
+            ticker_to_market = {v: k for k, v in kalshi_tickers.items()}
+        else:
+            # Fallback: derive from trades
+            for trade in trades:
+                ticker = trade.get("ticker", "")
+                reason = trade.get("entry_reason", "")
+                if ticker and reason and reason in ("home_win", "draw", "away_win"):
+                    ticker_to_market[ticker] = reason
     market_to_ticker: dict[str, str] = {v: k for k, v in ticker_to_market.items()}
 
     # Extract team codes from tickers
@@ -327,9 +372,12 @@ def plot_replay(
         sigma_mc[mt] = [tk.get("sigma_MC", {}).get(mt, 0.0) for tk in ticks]
 
     # P_kalshi series (sampled at tick times)
-    kalshi_series = _build_kalshi_series(
-        ob_records, ticks, ticker_to_market, ob_ts_is_match_time,
-    )
+    if kalshi_from_ticks is not None:
+        kalshi_series = kalshi_from_ticks
+    else:
+        kalshi_series = _build_kalshi_series(
+            ob_records, ticks, ticker_to_market, ob_ts_is_match_time,
+        )
 
     # Goals and period changes
     goals = [e for e in events if e.get("type") == "goal"]
