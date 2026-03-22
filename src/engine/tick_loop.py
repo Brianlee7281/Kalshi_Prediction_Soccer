@@ -62,16 +62,23 @@ async def tick_loop(
         # ── v5 7-step pipeline ──────────────────────────────
 
         # Step 1: Update effective match time
-        # In replay mode (tick_interval=0), poller drives model.t directly
         if tick_interval > 0:
+            # Live: wall-clock driven
             model.update_time()
         else:
-            # Replay: skip MC if model.t hasn't advanced (poller hasn't fed new data)
-            if model.t == _last_t:
-                await asyncio.sleep(0.01)  # yield to let poller run
-                model.tick_count -= 1  # don't count skipped ticks
-                continue
-            _last_t = model.t
+            # Replay: advance model.t by 1 second (1/60 minute) per tick.
+            # Poller may jump model.t on minute boundaries via events;
+            # we continue incrementing from whatever model.t is.
+            if _last_t < 0:
+                # First tick: wait for poller to set initial model.t
+                if model.t == 0.0 and model.engine_phase == "FIRST_HALF":
+                    await asyncio.sleep(0.01)
+                    model.tick_count -= 1
+                    continue
+                _last_t = model.t
+            else:
+                model.t += 1.0 / 60.0
+                _last_t = model.t
 
         # Step 2: EKF prediction step
         if model.ekf_tracker is not None:
