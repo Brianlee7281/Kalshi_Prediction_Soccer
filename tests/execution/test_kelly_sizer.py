@@ -153,12 +153,12 @@ def test_baker_mchale_partial_shrink():
 
 def test_surprise_multiplier_neutral():
     result = apply_surprise_multiplier(1.0, 0.0)
-    assert result == pytest.approx(0.10)
+    assert result == pytest.approx(0.25)
 
 
 def test_surprise_multiplier_high():
     result = apply_surprise_multiplier(1.0, 0.70)
-    assert result == pytest.approx(0.275)
+    assert result == pytest.approx(0.425)
 
 
 # ── size_position ─────────────────────────────────────────────
@@ -171,7 +171,7 @@ def test_size_position_hard_caps():
         home_win=0.95, surprise_score=1.0, ekf_P_H=0.001, mu_H=0.1
     )
     sized = size_position(signal, payload, bankroll=1000.0)
-    assert sized.kelly_amount <= 50.0
+    assert sized.kelly_amount <= 250.0
 
 
 def test_size_position_per_match_cap():

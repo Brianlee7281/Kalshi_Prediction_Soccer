@@ -146,9 +146,9 @@ def test_order_allowed() -> None:
     # Default: all clear → allowed
     assert model.order_allowed is True
 
-    # Cooldown blocks
+    # Cooldown no longer blocks — post-goal repricing is where edges appear
     model.cooldown = True
-    assert model.order_allowed is False
+    assert model.order_allowed is True
     model.cooldown = False
 
     # OB freeze blocks
@@ -156,11 +156,11 @@ def test_order_allowed() -> None:
     assert model.order_allowed is False
     model.ob_freeze = False
 
-    # Non-IDLE event state blocks
+    # Event state no longer blocks at model level — Phase 4 handles this
     model.event_state = "PRELIMINARY"
-    assert model.order_allowed is False
+    assert model.order_allowed is True
     model.event_state = "CONFIRMED"
-    assert model.order_allowed is False
+    assert model.order_allowed is True
 
     # Back to IDLE → allowed again
     model.event_state = "IDLE"

@@ -61,8 +61,8 @@ async def test_paper_order_immediate_fill():
     assert fill is not None
     assert fill.status == "paper"
     assert fill.quantity == 18
-    assert fill.price == 0.55
-    assert fill.fill_cost == pytest.approx(18 * 0.55)
+    assert fill.price == pytest.approx(0.555)
+    assert fill.fill_cost == pytest.approx(18 * 0.555)
 
 
 @pytest.mark.asyncio

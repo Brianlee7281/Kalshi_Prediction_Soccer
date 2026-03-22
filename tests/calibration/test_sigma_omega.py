@@ -68,10 +68,10 @@ def test_sigma_omega_positive() -> None:
 
 
 def test_sigma_omega_default_few_matches() -> None:
-    """With < 30 matches, should return default 0.01."""
+    """With < 30 matches, should return default 0.003."""
     intervals_by_match = _build_matches(10)
     result = estimate_sigma_omega_sq(intervals_by_match, _make_mock_opt())
-    assert result == 0.01
+    assert result == 0.003
 
 
 def test_sigma_omega_clamped() -> None:

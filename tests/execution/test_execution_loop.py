@@ -99,7 +99,7 @@ def test_paper_exit_fill():
     pos = _make_position()
     fill = _paper_exit_fill(pos, exit_price=0.60, contracts=5)
     assert fill.quantity == 5
-    assert fill.price == 0.60
+    assert fill.price == pytest.approx(0.595)
     assert fill.status == "paper"
     assert fill.order_id.startswith("paper-exit-")
 
@@ -108,16 +108,18 @@ def test_compute_exit_pnl_buy_yes():
     pos = _make_position(direction="BUY_YES", entry_price=0.55, quantity=10)
     fill = _paper_exit_fill(pos, exit_price=0.62, contracts=10)
     pnl = _compute_exit_pnl(pos, fill)
-    # (0.62 - 0.55) * 10 = 0.70
-    assert pnl == pytest.approx(0.70)
+    # exit fill_price = 0.62 - 0.005 spread = 0.615
+    # (0.615 - 0.55) * 10 = 0.65
+    assert pnl == pytest.approx(0.65)
 
 
 def test_compute_exit_pnl_buy_no():
     pos = _make_position(direction="BUY_NO", entry_price=0.45, quantity=10)
     fill = _paper_exit_fill(pos, exit_price=0.60, contracts=10)
     pnl = _compute_exit_pnl(pos, fill)
-    # ((1.0 - 0.60) - 0.45) * 10 = -0.50
-    assert pnl == pytest.approx(-0.50)
+    # exit fill_price = 0.60 + 0.005 spread = 0.605
+    # ((1.0 - 0.605) - 0.45) * 10 = -0.55
+    assert pnl == pytest.approx(-0.55)
 
 
 # ── Execution loop smoke tests ───────────────────────────────
