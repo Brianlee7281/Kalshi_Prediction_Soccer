@@ -32,9 +32,14 @@ class ExecutionConfig:
 
     # Position management (§13.4)
     MIN_HOLD_TICKS: int = 30           # ~30 seconds at 1Hz tick rate
-    COOLDOWN_AFTER_EXIT: int = 0       # no cooldown — allow immediate re-entry after exit
+    COOLDOWN_AFTER_EXIT: int = 60      # ~60 seconds before re-entering same market
     EKF_DIVERGENCE_THRESHOLD: float = 1.5  # exit if P_H or P_A exceeds this
     EXPIRY_EVAL_MINUTE: float = 85.0   # begin expiry evaluation after this match minute
+    EXPIRY_NO_NEW_ENTRIES_MINUTE: float = 80.0  # block new entries after this match minute
+
+    # Entry filters (from 18-match replay analysis)
+    MIN_ENTRY_EDGE: float = 0.04      # minimum absolute EV to enter (4 cents)
+    MAX_ENTRY_PRICE: float = 0.50     # skip markets where contract cost > 50c
 
     # Paper fill simulation
     PAPER_HALF_SPREAD: float = 0.005   # half of C_SPREAD; entry/exit fill price penalty

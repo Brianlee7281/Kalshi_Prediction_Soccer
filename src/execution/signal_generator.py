@@ -81,6 +81,10 @@ def generate_signals(
     if not payload.order_allowed:
         return []
 
+    # Block new entries in final phase of match
+    if payload.t > CONFIG.EXPIRY_NO_NEW_ENTRIES_MINUTE:
+        return []
+
     signals: list[Signal] = []
 
     for market_type in MARKET_TYPES:
@@ -106,6 +110,10 @@ def generate_signals(
         if direction == "HOLD":
             continue
 
+        # BUY_NO only allowed after surprise events (post-goal overreaction)
+        if direction == "BUY_NO" and payload.surprise_score <= 0:
+            continue
+
         mu_market = _get_market_mu(market_type, payload.mu_H, payload.mu_A)
         ekf_P = _get_market_ekf_P(market_type, payload.ekf_P_H, payload.ekf_P_A)
 
@@ -115,6 +123,15 @@ def generate_signals(
 
         theta = compute_dynamic_threshold(p_model, sigma_mc_val, ekf_P, mu_market)
         if ev < theta:
+            continue
+
+        # Minimum absolute edge floor — thin edges don't survive real spread
+        if ev < CONFIG.MIN_ENTRY_EDGE:
+            continue
+
+        # Skip efficiently-priced markets (>50c contracts have no model edge)
+        entry_cost = p_k if direction == "BUY_YES" else 1.0 - p_k
+        if entry_cost > CONFIG.MAX_ENTRY_PRICE:
             continue
 
         signals.append(

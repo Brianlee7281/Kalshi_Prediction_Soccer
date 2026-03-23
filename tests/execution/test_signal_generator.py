@@ -159,9 +159,12 @@ def test_generate_signals_filters_below_threshold():
 
 
 def test_generate_signals_post_goal_edge_passes():
-    """Post-goal scenario: high ekf_P + high mu, but 8% edge should still trade."""
-    payload = _make_payload(home_win=0.81, ekf_P_H=0.25, mu_H=1.5)
-    p_kalshi = {"home_win": 0.73}
+    """Post-goal scenario: high ekf_P + high mu, but 8% edge should still trade.
+
+    Uses p_kalshi=0.38 (below MAX_ENTRY_PRICE=0.50) so the price cap doesn't block.
+    """
+    payload = _make_payload(home_win=0.46, ekf_P_H=0.25, mu_H=1.5)
+    p_kalshi = {"home_win": 0.38}
     tickers = {"home_win": "TICKER-HOME"}
     signals = generate_signals(payload, p_kalshi, tickers)
     home_signals = [s for s in signals if s.market_type == "home_win"]
@@ -184,3 +187,37 @@ def test_generate_signals_produces_signal():
     signals = generate_signals(payload, p_kalshi, tickers)
     assert len(signals) >= 1
     assert signals[0].direction == "BUY_YES"
+
+
+# ── entry filters (MIN_ENTRY_EDGE, MAX_ENTRY_PRICE) ─────────
+
+
+def test_generate_signals_filters_below_min_edge():
+    """3c edge passes dynamic theta but is below 4c MIN_ENTRY_EDGE floor."""
+    payload = _make_payload(home_win=0.53, ekf_P_H=0.01, mu_H=0.2)
+    p_kalshi = {"home_win": 0.50}
+    tickers = {"home_win": "TICKER-HOME"}
+    signals = generate_signals(payload, p_kalshi, tickers)
+    home_signals = [s for s in signals if s.market_type == "home_win"]
+    assert len(home_signals) == 0
+
+
+def test_generate_signals_filters_high_entry_price():
+    """Signal at 55c entry price is filtered by MAX_ENTRY_PRICE=0.50."""
+    payload = _make_payload(home_win=0.65, ekf_P_H=0.05, mu_H=0.5)
+    p_kalshi = {"home_win": 0.55}
+    tickers = {"home_win": "TICKER-HOME"}
+    signals = generate_signals(payload, p_kalshi, tickers)
+    home_signals = [s for s in signals if s.market_type == "home_win"]
+    assert len(home_signals) == 0
+
+
+def test_generate_signals_passes_below_max_price_with_edge():
+    """45c entry with 10c edge should pass both filters."""
+    payload = _make_payload(home_win=0.55, ekf_P_H=0.05, mu_H=0.5)
+    p_kalshi = {"home_win": 0.45}
+    tickers = {"home_win": "TICKER-HOME"}
+    signals = generate_signals(payload, p_kalshi, tickers)
+    home_signals = [s for s in signals if s.market_type == "home_win"]
+    assert len(home_signals) == 1
+    assert home_signals[0].direction == "BUY_YES"
